@@ -12,7 +12,7 @@ defaults:
   - /evolution: default
   - /algorithm: single_island_no_distant_parents
   - /mutation: llm_rewrite
-  - /pipeline: memory_guided_noise
+  - /pipeline: memory_guided
   - /runner: default
   - /scheduling: cached_first
   - /loader: directory

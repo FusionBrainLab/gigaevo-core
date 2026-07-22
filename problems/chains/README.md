@@ -44,12 +44,12 @@ CHAIN_DEFAULTS=(
 # `memory/write=live` is the shipped memory=v2 default (same-run read+write);
 # it is passed explicitly here to mirror the launcher. Crediting is internal to
 # memory=v2 (the v1 memory/crediting group is gone).
-python run.py "${CHAIN_DEFAULTS[@]}" pipeline=memory_guided_noise \
+python run.py "${CHAIN_DEFAULTS[@]}" pipeline=memory_guided \
     memory=v2 memory/write=live memory/llm=qwen_instruct \
     memory.llm.models.0.base_url="$LITELLM_BASE_URL"
 
 # Memory OFF (control arm — keep one in any A/B):
-python run.py "${CHAIN_DEFAULTS[@]}" pipeline=guided_noise memory=none
+python run.py "${CHAIN_DEFAULTS[@]}" pipeline=guided memory=none
 ```
 
 Headline result (Qwen-235B mutator, 250 mutants/run): the recipe's best

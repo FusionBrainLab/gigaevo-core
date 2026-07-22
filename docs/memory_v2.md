@@ -34,7 +34,7 @@ python run.py \
   algorithm=chains_bd3d \
   enable_chain_structural_metrics=true \
   num_parents=1 \
-  pipeline=memory_guided_noise \
+  pipeline=memory_guided \
   memory=v2 memory/write=live
 ```
 
@@ -48,8 +48,8 @@ The reward card prior is zero-mean by default; `memory/embedding_prior=linear`
 turns on the embedding-informed prior (see Bounded Hierarchical Utility), and
 `none` is the byte-identical control.
 
-The startup validator rejects multi-parent use, metadata-dropping pipelines,
-and refresh coalescing. A causal decision belongs to one mutation attempt;
+The startup validator rejects multi-parent use and refresh coalescing. A causal
+decision belongs to one mutation attempt;
 reusing a cached parent assignment for concurrent mutations would give one
 decision several outcomes.
 
@@ -271,8 +271,11 @@ fail-closed.
 
 If child and base evaluations have the same non-empty ordered cohort digest,
 the reward likelihood uses the analytic paired-difference standard error. A
-scalar result or cohort mismatch records unknown measurement uncertainty; it is
-never mislabeled as exact.
+validator may instead report a direct SE, or a sample SD plus replicate count,
+through `artifact["_evaluation_measurements"]`. When both child and frozen base
+measurements are present, their standard errors are combined in quadrature. If
+neither paired nor reported uncertainty is usable, the scalar outcome records
+`se=None`; missing uncertainty is never mislabeled as exact.
 
 ## Risk-Gated Probability Matching
 

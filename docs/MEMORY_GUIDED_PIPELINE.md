@@ -33,16 +33,32 @@ python run.py problem.name=heilbron pipeline=memory_guided memory=full \
   checkpoint_dir=/data/banks/heilbron
 ```
 
-## Noise Variant (`pipeline=memory_guided_noise`)
+## Evaluation metadata and uncertainty
 
-Wire-identical DAG except the validator stage additionally routes the reserved
-`artifact["_program_metadata"]` namespace (e.g. `per_sample_scores` from
-`validate()`) onto `program.metadata` — the vector never enters prompts. Pair
-with `archive_selector=paired_bootstrap` and a problem whose `validate()` emits
-the vector (e.g. `chains/hover/full7_vectorized`) for noise-aware archive
-replacement; `run.py` rejects the paired selector under any pipeline that does
-not route program metadata. `pipeline=guided_noise` is the memory-free sibling
-(same routing on the plain guided DAG) for no-memory control arms.
+The standard `guided` and `memory_guided` pipelines consume reserved validator
+artifact namespaces and place their contents on `program.metadata`; reserved
+data never enters mutation prompts. `artifact["_program_metadata"]` carries
+arbitrary evaluator-owned metadata such as `per_sample_scores` for the paired
+archive selector. `artifact["_evaluation_measurements"]` carries typed scalar
+uncertainty, for example:
+
+```python
+return metrics, {
+    "_evaluation_measurements": {
+        "fitness": {
+            "sample_sd": cv_score_std,
+            "n": len(fold_scores),
+            "method": "cross_validation",
+        }
+    }
+}
+```
+
+The validator stage binds the measurement to `metrics["fitness"]`, stores it on
+the program, and converts `sample_sd / sqrt(n)` to a standard error when Memory
+V2 records the child-versus-parent outcome. Validators may instead provide a
+direct non-negative `se`. Missing measurements preserve the ordinary
+`se=None` path.
 
 ## DAG Contract
 

@@ -379,7 +379,7 @@ def validate(payload):
                 graph.target, np.asarray(dataset.y_train[:sample_size])
             )
         stage = "model_fit"
-        metrics = build(graph.dataset).validate(_factory(graph))
+        metrics, evaluation_artifact = build(graph.dataset).validate(_factory(graph))
         metrics.update(
             {
                 "graph_node_count": float(len(graph.nodes)),
@@ -387,11 +387,14 @@ def validate(payload):
                 "generated_feature_count": float(len(graph.feature_output_columns)),
             }
         )
-        return metrics, {
+        artifact = {
             "dataset": graph.dataset,
             "output_columns": graph.output_columns,
             "graph_node_count": len(graph.nodes),
         }
+        if isinstance(evaluation_artifact, dict):
+            artifact.update(evaluation_artifact)
+        return metrics, artifact
     except Exception as exc:
         return dict(_INVALID), _failure_artifact(exc, stage)
 

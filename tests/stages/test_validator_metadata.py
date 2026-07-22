@@ -1,4 +1,4 @@
-"""Tests for ProgramMetadataValidatorStage.
+"""Tests for artifact-aware ProgramMetadataValidatorStage.
 
 Contract: ``validate()`` may return ``(metrics, {"_program_metadata": {...}})``;
 the stage pops the namespace at eval time so fields land on
@@ -10,7 +10,13 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from gigaevo.programs.core_types import ProgramStageResult, StageError, StageState
+from gigaevo.programs.metrics.evaluation import (
+    EVALUATION_MEASUREMENTS_ARTIFACT_KEY,
+    EVALUATION_MEASUREMENTS_METADATA_KEY,
+)
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.programs.stages.cache_handler import NO_CACHE
@@ -19,6 +25,7 @@ from gigaevo.programs.stages.python_executors.execution import CallValidatorFunc
 from gigaevo.programs.stages.validator_metadata import (
     PROGRAM_METADATA_ARTIFACT_KEY,
     ProgramMetadataValidatorStage,
+    route_evaluation_measurements,
     route_program_metadata,
 )
 
@@ -100,6 +107,85 @@ class TestRouteProgramMetadata:
         assert program.metadata == {}
         assert remaining == {"feedback": "text"}
 
+    def test_rejects_measurements_in_untyped_program_namespace(self):
+        program = _prog()
+        artifact = {
+            PROGRAM_METADATA_ARTIFACT_KEY: {
+                EVALUATION_MEASUREMENTS_METADATA_KEY: {"fitness": {"se": 0.1}}
+            }
+        }
+        with pytest.raises(ValueError, match="is reserved"):
+            route_program_metadata(program, artifact)
+
+
+class TestRouteEvaluationMeasurements:
+    def test_normalizes_sample_sd_and_strips_namespace(self):
+        program = _prog()
+        artifact = {
+            EVALUATION_MEASUREMENTS_ARTIFACT_KEY: {
+                "fitness": {
+                    "sample_sd": 0.12,
+                    "n": 4,
+                    "method": "cross_validation",
+                }
+            },
+            "feedback": "keep me",
+        }
+
+        remaining = route_evaluation_measurements(program, {"fitness": 0.75}, artifact)
+
+        assert remaining == {"feedback": "keep me"}
+        assert program.metadata[EVALUATION_MEASUREMENTS_METADATA_KEY] == {
+            "fitness": {
+                "value": 0.75,
+                "sample_sd": 0.12,
+                "n": 4,
+                "method": "cross_validation",
+            }
+        }
+
+    def test_accepts_direct_standard_error(self):
+        program = _prog()
+        route_evaluation_measurements(
+            program,
+            {"fitness": 0.75},
+            {
+                EVALUATION_MEASUREMENTS_ARTIFACT_KEY: {
+                    "fitness": {"se": 0.03, "method": "bootstrap"}
+                }
+            },
+        )
+        assert program.metadata[EVALUATION_MEASUREMENTS_METADATA_KEY]["fitness"] == {
+            "value": 0.75,
+            "se": 0.03,
+            "method": "bootstrap",
+        }
+
+    def test_absence_clears_stale_measurement(self):
+        program = _prog(
+            evaluation_measurements={
+                "fitness": {"value": 0.5, "se": 0.1, "method": "old"}
+            }
+        )
+        assert route_evaluation_measurements(program, {"fitness": 0.6}, None) is None
+        assert EVALUATION_MEASUREMENTS_METADATA_KEY not in program.metadata
+
+    def test_rejects_sample_sd_without_replicates(self):
+        with pytest.raises(ValueError, match="sample_sd requires n >= 2"):
+            route_evaluation_measurements(
+                _prog(),
+                {"fitness": 0.75},
+                {
+                    EVALUATION_MEASUREMENTS_ARTIFACT_KEY: {
+                        "fitness": {
+                            "sample_sd": 0.1,
+                            "n": 1,
+                            "method": "cross_validation",
+                        }
+                    }
+                },
+            )
+
 
 # ---------------------------------------------------------------------------
 # ProgramMetadataValidatorStage — stage behavior
@@ -117,6 +203,20 @@ def validate(payload):
 _DICT_VALIDATOR = """
 def validate(payload):
     return {"fitness": 0.5, "is_valid": 1}
+"""
+
+_MEASUREMENT_VALIDATOR = """
+def validate(payload):
+    return {"fitness": 0.5, "is_valid": 1}, {
+        "_evaluation_measurements": {
+            "fitness": {
+                "sample_sd": 0.1,
+                "n": 4,
+                "method": "cross_validation",
+            }
+        },
+        "feedback": "visible",
+    }
 """
 
 
@@ -142,6 +242,25 @@ class TestProgramMetadataValidatorStage:
         assert metrics == {"fitness": 0.5, "is_valid": 1}
         assert artifact is None
         assert program.metadata == {}
+
+    async def test_measurement_lands_on_metadata_and_not_artifact(self, tmp_path):
+        program = _prog()
+        result = await _run(
+            _stage(tmp_path, _MEASUREMENT_VALIDATOR), program, "payload"
+        )
+
+        assert result.status == StageState.COMPLETED
+        metrics, artifact = result.output.data
+        assert metrics["fitness"] == 0.5
+        assert artifact == {"feedback": "visible"}
+        assert program.metadata[EVALUATION_MEASUREMENTS_METADATA_KEY] == {
+            "fitness": {
+                "value": 0.5,
+                "sample_sd": 0.1,
+                "n": 4,
+                "method": "cross_validation",
+            }
+        }
 
     async def test_failure_result_passes_through_untouched(self, tmp_path):
         program = _prog()

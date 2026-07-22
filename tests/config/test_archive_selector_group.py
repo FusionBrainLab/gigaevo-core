@@ -83,28 +83,21 @@ def test_multi_island_fitness_island_binds_simplicity_stays_inline() -> None:
     assert len(cfg.islands[1].archive_selector.fitness_keys) == 2
 
 
-def test_paired_selector_without_metadata_pipeline_is_rejected() -> None:
-    cfg = _compose("archive_selector=paired_bootstrap", "pipeline=guided")
-
-    with pytest.raises(ValueError, match="routes_program_metadata"):
-        validate_paired_selector_pipeline_compat(cfg)
-
-
-def test_paired_selector_with_noise_pipeline_passes() -> None:
-    cfg = _compose("archive_selector=paired_bootstrap", "pipeline=memory_guided_noise")
+def test_paired_selector_with_memory_guided_pipeline_passes() -> None:
+    cfg = _compose("archive_selector=paired_bootstrap", "pipeline=memory_guided")
 
     validate_paired_selector_pipeline_compat(cfg)
 
 
-def test_paired_selector_with_guided_noise_pipeline_passes() -> None:
-    cfg = _compose("archive_selector=paired_bootstrap", "pipeline=guided_noise")
+def test_paired_selector_with_guided_pipeline_passes() -> None:
+    cfg = _compose("archive_selector=paired_bootstrap", "pipeline=guided")
 
     validate_paired_selector_pipeline_compat(cfg)
 
 
 def test_point_selector_passes_under_any_pipeline() -> None:
     validate_paired_selector_pipeline_compat(_compose())
-    validate_paired_selector_pipeline_compat(_compose("pipeline=memory_guided_noise"))
+    validate_paired_selector_pipeline_compat(_compose("pipeline=guided"))
 
 
 def test_inline_paired_island_is_caught() -> None:

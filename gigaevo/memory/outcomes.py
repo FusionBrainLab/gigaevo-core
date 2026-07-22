@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+import math
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 import numpy as np
 
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY,
+    MUTATION_MEMORY_BASE_EVALUATION_MEASUREMENTS_METADATA_KEY,
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
     MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY,
@@ -29,6 +31,10 @@ from gigaevo.memory.events import (
     emit_memory_event,
 )
 from gigaevo.programs.metrics.context import MetricsContext
+from gigaevo.programs.metrics.evaluation import (
+    EVALUATION_MEASUREMENTS_METADATA_KEY,
+    reported_standard_error,
+)
 from gigaevo.programs.metrics.paired import (
     COHERENCE_TOL,
     PER_SAMPLE_SCORES_KEY,
@@ -230,6 +236,58 @@ def _paired_uncertainty(
     return se, int(child.size), "paired", child_signature
 
 
+def _reported_uncertainty(
+    program: Program,
+    *,
+    metric_key: str,
+    child_fitness: float,
+    base_fitness: float,
+) -> float | None:
+    """Independent-difference SE from two evaluator-reported measurements."""
+
+    child_se = reported_standard_error(
+        program.get_metadata(EVALUATION_MEASUREMENTS_METADATA_KEY),
+        metric_key=metric_key,
+        expected_value=child_fitness,
+    )
+    base_se = reported_standard_error(
+        program.get_metadata(MUTATION_MEMORY_BASE_EVALUATION_MEASUREMENTS_METADATA_KEY),
+        metric_key=metric_key,
+        expected_value=base_fitness,
+    )
+    if child_se is None or base_se is None:
+        return None
+    combined = math.hypot(child_se, base_se)
+    return combined if math.isfinite(combined) else None
+
+
+def _outcome_uncertainty(
+    program: Program,
+    *,
+    metric_key: str,
+    child_fitness: float,
+    base_fitness: float,
+    higher_is_better: bool,
+) -> tuple[float | None, int | None, Literal["scalar", "paired"], str]:
+    """Prefer paired vectors, then use reported marginal standard errors."""
+
+    paired = _paired_uncertainty(
+        program,
+        child_fitness=child_fitness,
+        base_fitness=base_fitness,
+        higher_is_better=higher_is_better,
+    )
+    if paired[0] is not None:
+        return paired
+    reported = _reported_uncertainty(
+        program,
+        metric_key=metric_key,
+        child_fitness=child_fitness,
+        base_fitness=base_fitness,
+    )
+    return reported, None, "scalar", ""
+
+
 def _outcome_payload(
     program: Program,
     metrics_context: MetricsContext | None,
@@ -294,8 +352,9 @@ def _outcome_payload(
                     n_pairs,
                     measurement_kind,
                     pairing_signature,
-                ) = _paired_uncertainty(
+                ) = _outcome_uncertainty(
                     program,
+                    metric_key=primary_metric,
                     child_fitness=child_fitness,
                     base_fitness=base_fitness,
                     higher_is_better=higher_is_better,

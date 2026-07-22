@@ -3,6 +3,7 @@ from gigaevo.evolution.engine.mutation import (
     freeze_base_parent_snapshot,
 )
 from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_BASE_EVALUATION_MEASUREMENTS_METADATA_KEY,
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
     MUTATION_MEMORY_BASE_SCORES_METADATA_KEY,
@@ -11,6 +12,7 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
+from gigaevo.programs.metrics.evaluation import EVALUATION_MEASUREMENTS_METADATA_KEY
 from gigaevo.programs.metrics.paired import PER_SAMPLE_SCORES_KEY
 
 
@@ -98,6 +100,37 @@ def test_snapshot_omits_scores_when_parent_has_none():
         parent = _FakeParentWithScores(["card-x"], {"r2": 0.5}, scores=scores)
         snap = freeze_base_parent_snapshot([parent], base_parent=1)
         assert MUTATION_MEMORY_BASE_SCORES_METADATA_KEY not in snap
+
+
+class _FakeParentWithMeasurements(_FakeParent):
+    def __init__(self, *args, measurements=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._measurements = measurements
+
+    def get_metadata(self, key):
+        if key == EVALUATION_MEASUREMENTS_METADATA_KEY:
+            return self._measurements
+        return super().get_metadata(key)
+
+
+def test_snapshot_freezes_base_evaluation_measurements():
+    measurements = {
+        "fitness": {
+            "value": 0.5,
+            "sample_sd": 0.1,
+            "n": 4,
+            "method": "cross_validation",
+        }
+    }
+    parent = _FakeParentWithMeasurements(
+        ["card-x"], {"fitness": 0.5}, measurements=measurements
+    )
+    snap = freeze_base_parent_snapshot([parent], base_parent=1)
+
+    frozen = snap[MUTATION_MEMORY_BASE_EVALUATION_MEASUREMENTS_METADATA_KEY]
+    assert frozen == measurements
+    assert frozen is not measurements
+    assert frozen["fitness"] is not measurements["fitness"]
 
 
 def test_shared_card_provenance_credits_base_parent_not_listing_order():

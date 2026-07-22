@@ -170,7 +170,7 @@ python run.py problem.name=heilbron storage=redis redis.db=5
 
 # Default read/write memory v2 run (shown explicitly)
 python run.py problem.name=heilbron \
-    pipeline=memory_guided_noise memory=v2 memory/write=live num_parents=1 \
+    pipeline=memory_guided memory=v2 memory/write=live num_parents=1 \
     checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
 
 # Balanced memory-v2 validation (50% delivery / 50% control)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Literal
 
@@ -12,6 +13,7 @@ from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY,
+    MUTATION_MEMORY_BASE_EVALUATION_MEASUREMENTS_METADATA_KEY,
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
     MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY,
@@ -42,6 +44,7 @@ from gigaevo.memory.cards import (
     MutationAssignmentRecord,
 )
 from gigaevo.memory.selection_leases import SelectionLease
+from gigaevo.programs.metrics.evaluation import EVALUATION_MEASUREMENTS_METADATA_KEY
 from gigaevo.programs.metrics.paired import (
     PER_SAMPLE_SCORES_KEY,
     PER_SAMPLE_SIGNATURE_KEY,
@@ -154,9 +157,9 @@ def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
     metadata is overwritten on NO_CACHE requeue, so reward/context must read the
     child's stamp. ``base_fitness`` is derived from ``base_metrics`` at the write
     seam (where the fitness key is known), so it is not frozen here. The per-sample
-    score vector, when the eval emits one, is frozen with the metrics — it must
-    describe the same evaluation, and the parent's live vector is overwritten on
-    re-eval.
+    score vector and reported metric measurements, when emitted, are frozen with
+    the metrics — they must describe the same evaluation, and the parent's live
+    metadata is overwritten on re-evaluation.
     """
     if not parents:
         return {}
@@ -196,6 +199,11 @@ def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
         signature = base.get_metadata(PER_SAMPLE_SIGNATURE_KEY)
         if isinstance(signature, str) and signature:
             snapshot[MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY] = signature
+    raw_measurements = base.get_metadata(EVALUATION_MEASUREMENTS_METADATA_KEY)
+    if isinstance(raw_measurements, dict) and raw_measurements:
+        snapshot[MUTATION_MEMORY_BASE_EVALUATION_MEASUREMENTS_METADATA_KEY] = deepcopy(
+            raw_measurements
+        )
 
     parent_assignments: dict[str, dict] = {}
     card_sources: dict[str, dict] = {}

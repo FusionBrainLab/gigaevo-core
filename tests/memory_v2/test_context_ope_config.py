@@ -385,7 +385,7 @@ def test_memory_v2_rejects_crossover_before_instantiation() -> None:
             "num_parents": 2,
             "memory": {"capabilities": {"causal_v2": True}},
             "pipeline": {
-                "id": "memory_guided_noise",
+                "id": "memory_guided",
                 "routes_program_metadata": True,
             },
         }
@@ -404,7 +404,7 @@ def test_memory_v2_requires_fresh_decision_context() -> None:
                 "coalesce_refresh": False,
             },
             "pipeline": {
-                "id": "memory_guided_noise",
+                "id": "memory_guided",
                 "routes_program_metadata": True,
             },
             "pipeline_builder": {"fresh_context_reorder": False},
@@ -431,7 +431,7 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
                     "algorithm=chains_bd3d",
                     "enable_chain_structural_metrics=true",
                     "num_parents=1",
-                    "pipeline=memory_guided_noise",
+                    "pipeline=memory_guided",
                     "memory=v2",
                     "memory/write=live",
                     "memory/llm=qwen_instruct",

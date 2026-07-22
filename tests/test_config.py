@@ -104,7 +104,7 @@ def test_default_config_composes():
             f"possible wrong @package directive or missing defaults entry"
         )
     assert cfg.memory.capabilities.causal_v2 is True
-    assert cfg.pipeline.id == "memory_guided_noise"
+    assert cfg.pipeline.id == "memory_guided"
     assert cfg.memory.safety.gate_mode == "exclude_confident_incremental_harm"
     assert cfg.memory.safety.max_treated_invalid_probability is None
     assert cfg.memory.policy_config.offer_probability == pytest.approx(0.70)

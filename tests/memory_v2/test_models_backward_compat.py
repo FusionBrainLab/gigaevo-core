@@ -102,3 +102,21 @@ def test_terminal_outcome_loads_when_used_card_ids_absent():
 
     assert loaded.used_card_ids == ()
     assert loaded.status == "outcome"
+
+
+def test_scalar_outcome_accepts_reported_standard_error():
+    measurement = OutcomeMeasurement(value=0.2, se=0.03, kind="scalar")
+
+    assert measurement.se == 0.03
+    assert measurement.n_pairs is None
+    assert measurement.pairing_signature == ""
+
+
+def test_scalar_outcome_still_rejects_paired_metadata():
+    with pytest.raises(ValidationError, match="paired-cohort metadata"):
+        OutcomeMeasurement(
+            value=0.2,
+            se=0.03,
+            n_pairs=3,
+            kind="scalar",
+        )

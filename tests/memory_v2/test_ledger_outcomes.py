@@ -13,6 +13,7 @@ from gigaevo.evolution.engine.mutation import MutationFailure, generate_one_muta
 from gigaevo.evolution.mutation.base import MutationSpec
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY,
+    MUTATION_MEMORY_BASE_EVALUATION_MEASUREMENTS_METADATA_KEY,
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
     MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY,
@@ -41,6 +42,7 @@ from gigaevo.memory_v2.models import (
     canonical_digest,
 )
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
+from gigaevo.programs.metrics.evaluation import EVALUATION_MEASUREMENTS_METADATA_KEY
 from gigaevo.programs.metrics.paired import (
     PER_SAMPLE_SCORES_KEY,
     PER_SAMPLE_SIGNATURE_KEY,
@@ -125,7 +127,7 @@ def test_sqlite_ledger_counts_control_as_pending_and_freezes_terminal(
         ope_eligible=True,
         status="outcome",
         used_card_ids=_used_card_ids(record),
-        measurement=OutcomeMeasurement(value=0.2, se=None, kind="scalar"),
+        measurement=OutcomeMeasurement(value=0.2, se=0.03, kind="scalar"),
         completion_ordinal=4,
     )
     ledger.record_terminal(terminal)
@@ -134,7 +136,7 @@ def test_sqlite_ledger_counts_control_as_pending_and_freezes_terminal(
             child_id="child",
             status="outcome",
             fitness_delta=0.2,
-            fitness_delta_se=None,
+            fitness_delta_se=0.03,
             n_pairs=None,
             measurement_kind="scalar",
             pairing_signature="",
@@ -744,6 +746,26 @@ async def test_paired_outcome_requires_matching_ordered_cohort_signature(
     child.set_metadata(MUTATION_MEMORY_BASE_SCORES_METADATA_KEY, base_scores)
     child.set_metadata(PER_SAMPLE_SIGNATURE_KEY, signature)
     child.set_metadata(MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY, signature)
+    child.set_metadata(
+        EVALUATION_MEASUREMENTS_METADATA_KEY,
+        {
+            "fitness": {
+                "value": child.metrics["fitness"],
+                "se": 0.5,
+                "method": "fallback",
+            }
+        },
+    )
+    child.set_metadata(
+        MUTATION_MEMORY_BASE_EVALUATION_MEASUREMENTS_METADATA_KEY,
+        {
+            "fitness": {
+                "value": float(np.mean(base_scores)),
+                "se": 0.5,
+                "method": "fallback",
+            }
+        },
+    )
 
     await record_program_memory_outcome(
         child, storage=AsyncMock(), metrics_context=metrics_context()
@@ -764,9 +786,67 @@ async def test_paired_outcome_requires_matching_ordered_cohort_signature(
     )
     scalar = emitted[-1]
     assert scalar.measurement_kind == "scalar"
-    assert scalar.fitness_delta_se is None
+    assert scalar.fitness_delta_se == pytest.approx(np.hypot(0.5, 0.5))
     assert scalar.n_pairs is None
     assert scalar.pairing_signature == ""
+
+
+@pytest.mark.asyncio
+async def test_reported_evaluation_measurements_supply_scalar_gain_se(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted: list[MemoryOutcome] = []
+    monkeypatch.setattr("gigaevo.memory.outcomes.emit_memory_event", emitted.append)
+    child = Program(code="def child(): return 1", iteration=10)
+    child.metrics = {"is_valid": 1.0, "fitness": 0.8}
+    child.set_metadata(MUTATION_MEMORY_DECISION_ID_METADATA_KEY, "decision-reported")
+    child.set_metadata(
+        MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY,
+        MutationAssignmentRecord(
+            mutation_id=child.id,
+            used_ids=(),
+        ).model_dump(mode="json"),
+    )
+    child.set_metadata(MUTATION_MEMORY_BASE_ID_METADATA_KEY, "base")
+    child.set_metadata(
+        MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
+        {"is_valid": 1.0, "fitness": 0.6},
+    )
+    child.set_metadata(
+        EVALUATION_MEASUREMENTS_METADATA_KEY,
+        {
+            "fitness": {
+                "value": 0.8,
+                "sample_sd": 0.12,
+                "n": 4,
+                "method": "cross_validation",
+            }
+        },
+    )
+    child.set_metadata(
+        MUTATION_MEMORY_BASE_EVALUATION_MEASUREMENTS_METADATA_KEY,
+        {
+            "fitness": {
+                "value": 0.6,
+                "sample_sd": 0.08,
+                "n": 4,
+                "method": "cross_validation",
+            }
+        },
+    )
+
+    await record_program_memory_outcome(
+        child, storage=AsyncMock(), metrics_context=metrics_context()
+    )
+
+    outcome = emitted[-1]
+    assert outcome.measurement_kind == "scalar"
+    assert outcome.fitness_delta == pytest.approx(0.2)
+    assert outcome.fitness_delta_se == pytest.approx(
+        np.hypot(0.12 / np.sqrt(4), 0.08 / np.sqrt(4))
+    )
+    assert outcome.n_pairs is None
+    assert outcome.pairing_signature == ""
 
 
 def test_generation_failure_closes_the_durable_decision(

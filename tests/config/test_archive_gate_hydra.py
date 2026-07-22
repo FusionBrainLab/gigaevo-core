@@ -58,7 +58,7 @@ def test_archive_gate_provider_block_present_in_guided():
 def test_pipeline_builder_flag_interpolation_off():
     cfg = _compose("archive_gate_enabled=false")
     assert cfg.pipeline_builder._target_ == (
-        "gigaevo.entrypoint.noise_aware_pipeline.NoiseAwareMemoryGuidedPipelineBuilder"
+        "gigaevo.entrypoint.lineage_memory_pipeline.MemoryGuidedMutationPipelineBuilder"
     )
     assert cfg.pipeline_builder.archive_gate_enabled is False
     assert cfg.archive_gate_provider.enabled is False

@@ -22,6 +22,7 @@ _DEFAULT_BD_MAX = 2048
 _HOLDOUT_SPLITS = 5  # first fold of a 5-way split == 80/20 holdout
 _SEED = 0
 _DEFAULT_LCB_LAMBDA = 1.0  # lambda=1 == the textbook 1-standard-error rule
+_EVALUATION_MEASUREMENTS_KEY = "_evaluation_measurements"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -44,8 +45,15 @@ def _env_float(name: str, default: float) -> float:
         raise ValueError(f"{name} must be a float; got {raw!r}") from e
 
 
-def _aggregate_fitness(mean_score: float, cv_std: float, n_folds: int) -> float:
+def _fitness_mode() -> str:
     mode = os.environ.get(FITNESS_ENV, "mean").lower()
+    if mode not in {"mean", "lcb"}:
+        raise ValueError(f"{FITNESS_ENV} must be 'mean' or 'lcb'; got {mode!r}")
+    return mode
+
+
+def _aggregate_fitness(mean_score: float, cv_std: float, n_folds: int) -> float:
+    mode = _fitness_mode()
     if mode == "mean":
         return mean_score
     if mode == "lcb":
@@ -53,7 +61,25 @@ def _aggregate_fitness(mean_score: float, cv_std: float, n_folds: int) -> float:
             return mean_score
         lam = _env_float(LCB_LAMBDA_ENV, _DEFAULT_LCB_LAMBDA)
         return mean_score - lam * cv_std / np.sqrt(n_folds)
-    raise ValueError(f"{FITNESS_ENV} must be 'mean' or 'lcb'; got {mode!r}")
+    raise AssertionError(f"unhandled fitness mode {mode!r}")
+
+
+def _evaluation_measurement_artifact(
+    cv_score_std: float, n_folds: int
+) -> dict[str, object] | None:
+    """Report uncertainty only for the mean-fitness CV estimator."""
+
+    if n_folds <= 1 or _fitness_mode() != "mean":
+        return None
+    return {
+        _EVALUATION_MEASUREMENTS_KEY: {
+            "fitness": {
+                "sample_sd": cv_score_std,
+                "n": n_folds,
+                "method": "cross_validation",
+            }
+        }
+    }
 
 
 def _k_folds() -> int:
@@ -138,7 +164,10 @@ class TabularProblem:
             **secondary,
             **self._bd(ds, model_factory),
         }
-        return result
+        # The fold dispersion estimates uncertainty of the mean score, not of
+        # the optional LCB-derived fitness statistic. LCB mode therefore stays
+        # honestly unknown until it reports a direct uncertainty estimate.
+        return result, _evaluation_measurement_artifact(cv_score_std, len(scores))
 
     def score_on_test(self, model_factory) -> dict[str, float]:
         ds = self._dataset()

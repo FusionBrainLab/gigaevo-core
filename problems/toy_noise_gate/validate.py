@@ -6,7 +6,7 @@ same vector, while distinct programs draw independent noise — mimicking hover'
 single-eval variance (sigma_mean ~ 0.01 at N=64, NOISE_STD=0.08).
 
 Returns (metrics, artifact) with the per-sample vector under the
-"_program_metadata" reserved namespace; run with pipeline=memory_guided_noise.
+"_program_metadata" reserved namespace, which standard pipelines route.
 """
 
 import hashlib

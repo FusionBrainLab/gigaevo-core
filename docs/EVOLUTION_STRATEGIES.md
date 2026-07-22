@@ -556,7 +556,8 @@ program_b_score = 75.0 * 1.0 + 1.0 * 0.5 = 75.50
 #### PairedBootstrapArchiveSelector
 
 Noise-aware variant of `SumArchiveSelector` (single fitness key only): when both
-programs carry a `per_sample_scores` metadata vector (see `pipeline=memory_guided_noise`),
+programs carry a `per_sample_scores` metadata vector emitted through the
+validator's reserved `_program_metadata` artifact namespace,
 replacement requires a paired bootstrap to say the challenger is better with
 probability ≥ `p_accept` (default 0.75); otherwise it falls back to the point
 comparison above. Select via the Hydra group: `archive_selector=paired_bootstrap`

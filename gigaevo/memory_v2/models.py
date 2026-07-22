@@ -939,12 +939,10 @@ class OutcomeMeasurement(StrictFrozenModel):
                     "paired measurements require se, n_pairs, and pairing_signature"
                 )
         elif self.kind == "scalar":
-            if (
-                self.se is not None
-                or self.n_pairs is not None
-                or self.pairing_signature
-            ):
-                raise ValueError("scalar measurement uncertainty must remain unknown")
+            if self.n_pairs is not None or self.pairing_signature:
+                raise ValueError(
+                    "scalar measurements cannot carry paired-cohort metadata"
+                )
         elif self.se != 0.0 or self.n_pairs is not None or self.pairing_signature:
             raise ValueError("deterministic measurements require only se=0")
         return self

@@ -24,13 +24,24 @@ class _Problem:
     def validate(self, factory):
         model = factory()
         assert model.graph.dataset == "california"
-        return {
-            "fitness": 0.5,
-            "is_valid": 1.0,
-            "cv_score_std": 0.1,
-            "local_lipschitz_p95": 0.2,
-            "ood_delta_slope": 0.3,
-        }
+        return (
+            {
+                "fitness": 0.5,
+                "is_valid": 1.0,
+                "cv_score_std": 0.1,
+                "local_lipschitz_p95": 0.2,
+                "ood_delta_slope": 0.3,
+            },
+            {
+                "_evaluation_measurements": {
+                    "fitness": {
+                        "sample_sd": 0.1,
+                        "n": 3,
+                        "method": "cross_validation",
+                    }
+                }
+            },
+        )
 
     def score_on_test(self, factory):
         assert factory().graph.dataset == "california"
@@ -49,6 +60,11 @@ def test_validate_reuses_tabular_problem(monkeypatch):
     assert metrics["graph_max_depth"] == 1.0
     assert metrics["generated_feature_count"] == 1.0
     assert artifact["output_columns"] == ["fe_income_per_age"]
+    assert artifact["_evaluation_measurements"]["fitness"] == {
+        "sample_sd": 0.1,
+        "n": 3,
+        "method": "cross_validation",
+    }
 
 
 def test_validate_returns_invalid_metrics_for_bad_payload():

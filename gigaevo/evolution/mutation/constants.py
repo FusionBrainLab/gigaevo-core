@@ -84,6 +84,14 @@ MUTATION_MEMORY_BASE_SCORES_METADATA_KEY = "memory_base_scores"
 #: Ordered evaluation-cohort digest aligned with ``memory_base_scores``.
 MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY = "memory_base_score_signature"
 
+#: Frozen evaluator-reported uncertainty for the base parent's metrics. The
+#: child's own evaluation measurements may be refreshed on re-evaluation, so
+#: child-vs-base credit must retain the exact measurement paired with the
+#: frozen ``memory_base_metrics`` snapshot.
+MUTATION_MEMORY_BASE_EVALUATION_MEASUREMENTS_METADATA_KEY = (
+    "memory_base_evaluation_measurements"
+)
+
 #: Frozen onto a child at birth: per parent, the cache id of every parent stage
 #: output that produced the child (outputs live content-addressed in the storage
 #: stage-output store). Survives the parent's NO_CACHE stages being overwritten

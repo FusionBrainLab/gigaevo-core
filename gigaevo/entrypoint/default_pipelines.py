@@ -40,12 +40,12 @@ from gigaevo.programs.stages.mutation_context import MutationContextStage
 from gigaevo.programs.stages.python_executors.execution import (
     CallFileFunction,
     CallProgramFunction,
-    CallValidatorFunction,
     FetchArtifact,
     FetchMetrics,
 )
 from gigaevo.programs.stages.runtime_metrics import RuntimeFitnessStage
 from gigaevo.programs.stages.validation import ValidateCodeStage
+from gigaevo.programs.stages.validator_metadata import ProgramMetadataValidatorStage
 from gigaevo.runner.dag_blueprint import DAGBlueprint
 
 StageFactory = Callable[[], Stage]
@@ -401,11 +401,13 @@ class SourceProgramEvaluationFeature(PipelineFeature):
             ),
         )
 
-        # RunValidation
+        # RunValidation. Reserved validator artifact namespaces are always
+        # routed onto Program.metadata and removed before prompt formatting;
+        # validators that return only metrics retain the ordinary behavior.
         validator_path = problem_ctx.problem_dir / "validate.py"
         builder.add_stage(
             "CallValidatorFunction",
-            lambda: CallValidatorFunction(
+            lambda: ProgramMetadataValidatorStage(
                 path=validator_path,
                 function_name="validate",
                 timeout=stage_timeout,

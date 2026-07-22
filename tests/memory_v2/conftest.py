@@ -37,7 +37,7 @@ def environment() -> EnvironmentFingerprint:
         ),
         mutation_operator=LLMMutationOperator,
         program_format="json_document",
-        pipeline="memory_guided_noise",
+        pipeline="memory_guided",
         algorithm="chains_bd3d",
     )
 

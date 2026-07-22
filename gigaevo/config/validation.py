@@ -126,12 +126,6 @@ def validate_memory_v2_scope(cfg: DictConfig) -> None:
             "the frozen decision context and mutation baseline use the same "
             "fresh parent evaluation."
         )
-    if not bool(_raw_select(cfg, "pipeline.routes_program_metadata", False)):
-        pipeline_id = str(_raw_select(cfg, "pipeline.id", "<unknown>"))
-        raise ValueError(
-            "memory=v2 requires paired evaluation metadata, but "
-            f"pipeline={pipeline_id} does not route _program_metadata."
-        )
     mutation_target = _raw_select(cfg, "mutation_operator._target_", None)
     try:
         mutation_operator = get_class(str(mutation_target))
@@ -299,9 +293,9 @@ def validate_paired_selector_pipeline_compat(cfg: DictConfig) -> None:
     """Reject the paired archive gate when no pipeline routes per-sample scores.
 
     ``PairedBootstrapArchiveSelector`` reads ``metadata["per_sample_scores"]``,
-    which only a metadata-routing pipeline populates. Under any other pipeline
-    every comparison silently falls back to the point rule — an inert treatment
-    the run would never surface.
+    which an artifact-aware pipeline populates from the reserved validator
+    namespace. Under any other pipeline every comparison silently falls back to
+    the point rule — an inert treatment the run would never surface.
     """
 
     group_target = _raw_select(cfg, "archive_selector._target_", None)
@@ -324,9 +318,8 @@ def validate_paired_selector_pipeline_compat(cfg: DictConfig) -> None:
         "archive_selector=paired_bootstrap needs per_sample_scores on "
         f"program.metadata, but pipeline={pipeline_id} does not route "
         "_program_metadata. Pick a pipeline that declares "
-        "routes_program_metadata: true (see config/pipeline/) and a problem "
-        "whose validate() emits the vector, or archive_selector=point for a "
-        "control arm."
+        "routes_program_metadata: true and a problem whose validate() emits "
+        "the vector, or archive_selector=point for a control arm."
     )
 
 

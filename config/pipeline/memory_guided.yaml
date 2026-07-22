@@ -18,6 +18,7 @@ defaults:
 pipeline:
   id: memory_guided
   reads_external_memory: true
+  routes_program_metadata: true
 
 evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext

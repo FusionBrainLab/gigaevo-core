@@ -2,9 +2,8 @@
 
 Verbatim copy of full7 except the success return: emits the per-claim score
 vector under artifact["_program_metadata"]["per_sample_scores"] for paired
-noise-aware archive replacement. MUST run with pipeline=memory_guided_noise
-(ProgramMetadataValidatorStage strips the namespace before prompts); under
-pipeline=memory_guided the vector would leak into mutation prompts.
+noise-aware archive replacement. Standard pipelines route the reserved
+namespace onto program metadata and strip it before prompt formatting.
 
 Full-chain mode: no frozen steps, no topology matching. The LLM can freely
 rearrange step count, types, dependencies, and content within FULL_CHAIN_CONFIG
