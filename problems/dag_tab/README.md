@@ -136,6 +136,94 @@ Confirm that the resolved config contains:
 - `StructuredDiffMutationOperator`;
 - `AllowedDagTabChanges`.
 
+## S4-style launches: without and with Memory V2
+
+Run these recipes from a clean checkout of current `main`. Both pin the S4
+protocol to three-fold mean CV, a dataset-sized neutral DAG seed, the
+two-dimensional dynamic MAP-Elites archive, one parent, at most ten DAG nodes,
+and Gemini 3.5 Flash with a 32,768-token completion budget. Set `DATASET` to any
+directory under `GIGAEVO_TABULAR_DATA`; `california` is only the default.
+
+Load credentials, select a dataset, and point DAG-tab at the shared data root:
+
+```bash
+set -a
+source ~/gigaevo/.env
+set +a
+
+export GIGAEVO_TABULAR_DATA=~/tabm-data/data
+DATASET="${DATASET:-california}"
+```
+
+The evaluator defaults already provide three-fold mean CV and the standard
+behavior-descriptor budget.
+
+### Without memory
+
+`pipeline=guided memory=none` is the memory-free control. A complete single-run
+launch is:
+
+```bash
+python3 -u run.py \
+  problem.name=dag_tab \
+  problem.dataset="$DATASET" \
+  loader=dag_tab_seed \
+  program_format=json_document \
+  pipeline=guided \
+  memory=none \
+  mutation=structured_diff_dag_tab \
+  mutation_operator.allowed_changes.max_nodes=10 \
+  llm=gemini35_flash \
+  max_tokens=32768 \
+  max_mutants=100 \
+  algorithm=tabular/2d_local_ood
+```
+
+Hydra creates the single-run output directory. The original historical
+California three-replica S4 control launcher is
+`experiments/dag_tab_envelope_s4_20260722/launch_s4_dag_tab.sh`; it intentionally
+uses that experiment's non-neutral California seed.
+
+### With Memory V2
+
+The base experiment already defaults to `pipeline=memory_guided`, `memory=v2`,
+live memory writes, disk storage, and one parent. The treatment therefore only
+selects Qwen Instruct through the local LiteLLM proxy for card research and
+writing; Gemini 3.5 Flash remains the mutation model. Use a fresh checkpoint
+directory for every replica; sharing one would mix their cards, leases, and
+causal evidence.
+
+The reproducible three-replica launcher is:
+
+```bash
+RUN_ROOT="/tmp/gigaevo-dag-tab-${DATASET}-s4-memory-v2-$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$RUN_ROOT"
+
+setsid env \
+  RUN_ROOT="$RUN_ROOT" \
+  DATASET="$DATASET" \
+  PROXY_URL=http://localhost:8000/v1 \
+  experiments/dag_tab_envelope_s4_20260722/launch_s4_dag_tab_memory_v2.sh \
+    3 1 3 \
+  > "$RUN_ROOT/launcher.log" 2>&1 < /dev/null &
+
+echo "$!" | tee "$RUN_ROOT/launcher.pid"
+echo "$RUN_ROOT"
+```
+
+The launcher runs labels 101, 202, and 303 concurrently. It passes
+`problem.dataset=$DATASET` with `loader=dag_tab_seed`, gives every dataset run a
+fresh isolated Memory V2 bank, pins separate randomization seeds and
+`<run>/memory` checkpoint directories, records the exact Git revision, refuses
+existing replica directories, verifies both LLM endpoints, and keeps all run
+data on local disk.
+Explicit run directories are intentional here because three concurrent Hydra
+jobs can otherwise choose the same second-resolution default path. Three-fold
+CV emits `_evaluation_measurements`; `pipeline=memory_guided` stores that
+contract in program metadata, and Memory V2 uses it as scalar outcome SE. If a
+validator does not report uncertainty, the same path remains valid with
+`se=None`.
+
 ## Qwen experiment
 
 ```bash
