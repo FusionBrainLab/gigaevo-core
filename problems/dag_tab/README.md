@@ -153,10 +153,23 @@ set +a
 
 export GIGAEVO_TABULAR_DATA=~/tabm-data/data
 DATASET="${DATASET:-california}"
+MUTATION_LLM="${MUTATION_LLM:-gemini35_flash}"
 ```
 
 The evaluator defaults already provide three-fold mean CV and the standard
 behavior-descriptor budget.
+
+For Qwen-backed Memory V2, the required memory globals are:
+
+```bash
+export LOCAL_LLM_PROXY=http://localhost:8000/v1
+export LITELLM_MASTER_KEY=<litellm-master-key>
+```
+
+`OPENROUTER_API_KEY` is required by the Gemini mutation model, not by Memory V2.
+The launcher below sets `LOCAL_LLM_PROXY` and `NO_PROXY` itself; when it sources
+`.env`, that file therefore only needs `LITELLM_MASTER_KEY` and
+`OPENROUTER_API_KEY`. Langfuse variables are optional.
 
 ### Without memory
 
@@ -173,7 +186,7 @@ python3 -u run.py \
   memory=none \
   mutation=structured_diff_dag_tab \
   mutation_operator.allowed_changes.max_nodes=10 \
-  llm=gemini35_flash \
+  llm="$MUTATION_LLM" \
   max_tokens=32768 \
   max_mutants=100 \
   algorithm=tabular/2d_local_ood
@@ -183,6 +196,14 @@ Hydra creates the single-run output directory. The original historical
 California three-replica S4 control launcher is
 `experiments/dag_tab_envelope_s4_20260722/launch_s4_dag_tab.sh`; it intentionally
 uses that experiment's non-neutral California seed.
+
+For Gemini 3 Flash Preview, select its preset before running the same command:
+
+```bash
+MUTATION_LLM=gemini3_flash
+```
+
+For Gemini 3.5 Flash, keep the default `MUTATION_LLM=gemini35_flash`.
 
 ### With Memory V2
 
@@ -202,6 +223,7 @@ mkdir -p "$RUN_ROOT"
 setsid env \
   RUN_ROOT="$RUN_ROOT" \
   DATASET="$DATASET" \
+  MUTATION_LLM="$MUTATION_LLM" \
   PROXY_URL=http://localhost:8000/v1 \
   experiments/dag_tab_envelope_s4_20260722/launch_s4_dag_tab_memory_v2.sh \
     3 1 3 \
@@ -210,6 +232,10 @@ setsid env \
 echo "$!" | tee "$RUN_ROOT/launcher.pid"
 echo "$RUN_ROOT"
 ```
+
+Thus the complete Memory V2 launcher uses Gemini 3.5 Flash by default; set
+`MUTATION_LLM=gemini3_flash` before the block to run the same replicas with
+Gemini 3 Flash Preview.
 
 The launcher runs labels 101, 202, and 303 concurrently. It passes
 `problem.dataset=$DATASET` with `loader=dag_tab_seed`, gives every dataset run a
@@ -263,10 +289,10 @@ Qwen thinking runs remain substantially slower and more expensive than Gemini Fl
 
 ## Gemini 3 Flash via OpenRouter
 
-`config/llm/gemini3_flash.yaml` uses `google/gemini-3-flash-preview`, OpenRouter, and `structured_output_method: function_calling`. Its completion budget is capped at 6144 tokens so a malformed function call cannot consume the model's full 65k output window. Node rationales are limited to 500 characters and overlong otherwise-valid rationales are truncated during schema repair; prompts prohibit embedding code or JSON in rationale fields. Keep the API key only in the environment:
+`config/llm/gemini3_flash.yaml` uses `google/gemini-3-flash-preview`, OpenRouter, and `structured_output_method: function_calling`. Its completion budget is capped at 32,768 tokens. Node rationales are limited to 500 characters and overlong otherwise-valid rationales are truncated during schema repair; prompts prohibit embedding code or JSON in rationale fields. Keep the API key only in the environment:
 
 ```bash
-export OPENAI_API_KEY=<openrouter-api-key>
+export OPENROUTER_API_KEY=<openrouter-api-key>
 export GIGAEVO_TABULAR_DATA=/path/to/tabm-data/data
 
 python -u run.py \
