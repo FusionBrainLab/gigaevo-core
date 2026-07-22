@@ -1,0 +1,82 @@
+TASK — TABULAR BINARY CLASSIFICATION (tabarena-diabetes130us)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] time_in_hospital numeric
+- [1] num_lab_procedures numeric
+- [2] num_procedures numeric
+- [3] num_medications numeric
+- [4] number_outpatient numeric
+- [5] number_emergency numeric
+- [6] number_inpatient numeric
+- [7] number_diagnoses numeric
+- [8] race        categorical (integer code), 6 levels: 0=AfricanAmerican 1=Asian 2=Caucasian 3=Hispanic 4=Other 5=__MISSING__
+- [9] gender      categorical (integer code), 3 levels: 0=Female 1=Male 2=Unknown/Invalid
+- [10] age         categorical (integer code), 10 levels: 0=[0-10) 1=[10-20) 2=[20-30) 3=[30-40) 4=[40-50) 5=[50-60) 6=[60-70) 7=[70-80) 8=[80-90) 9=[90-100)
+- [11] weight      categorical (integer code), 10 levels: 0=>200 1=[0-25) 2=[100-125) 3=[125-150) 4=[150-175) 5=[175-200) 6=[25-50) 7=[50-75) 8=[75-100) 9=__MISSING__
+- [12] admission_type_id categorical (integer code), 8 levels: 0=Elective 1=Emergency 2=Newborn 3=Not Available 4=Not Mapped 5=Trauma Center 6=Urgent 7=nan
+- [13] discharge_disposition_id categorical (integer code), 24 levels: 0=Admitted as an inpatient to this hospital 1=Discharged to home 2=Discharged/transferred to ICF 3=Discharged/transferred to SNF 4=Discharged/transferred to a long term care hospital. 5=Discharged/transferred to a nursing facility certified under Medicaid but not certified under Medicare. 6=Discharged/transferred to another rehab fac including rehab units of a hospital . 7=Discharged/transferred to another short term hospital 8=Discharged/transferred to another type of inpatient care institution 9=Discharged/transferred to home under care of Home IV provider 10=Discharged/transferred to home with home health service 11=Discharged/transferred within this institution to Medicare approved swing bed 12=Discharged/transferred/referred another institution for outpatient services 13=Discharged/transferred/referred to a psychiatric hospital of psychiatric distinct part unit of a hospital 14=Discharged/transferred/referred to this institution for outpatient services 15=Expired 16=Expired at home. Medicaid only, hospice. 17=Hospice / home 18=Hospice / medical facility 19=Left AMA 20=Neonate discharged to another hospital for neonatal aftercare 21=Not Mapped 22=Still patient or expected to return for outpatient services 23=nan
+- [14] admission_source_id categorical (integer code), 16 levels: 0=Clinic Referral 1=Court/Law Enforcement 2=Emergency Room 3=Extramural Birth 4=HMO Referral 5=Normal Delivery 6=Not Available 7=Not Mapped 8=Physician Referral 9=Transfer from Ambulatory Surgery Center 10=Transfer from a Skilled Nursing Facility (SNF) 11=Transfer from a hospital 12=Transfer from another health care facility 13=Transfer from critial access hospital 14=Transfer from hospital inpt/same fac reslt in a sep claim 15=nan
+- [15] payer_code  categorical (integer code), 18 levels: 0=BC 1=CH 2=CM 3=CP 4=DM 5=FR 6=HM 7=MC 8=MD 9=MP 10=OG 11=OT 12=PO 13=SI 14=SP 15=UN 16=WC 17=__MISSING__
+- [16] medical_specialty categorical (integer code), 62 levels: 0=AllergyandImmunology 1=Anesthesiology 2=Anesthesiology-Pediatric 3=Cardiology 4=Cardiology-Pediatric 5=Dentistry ... 61=__MISSING__
+- [17] diag_1      categorical (integer code), 592 levels: 0=10 1=11 2=112 3=115 4=117 5=133 ... 591=__MISSING__
+- [18] diag_2      categorical (integer code), 577 levels: 0=110 1=111 2=112 3=117 4=131 5=135 ... 576=__MISSING__
+- [19] diag_3      categorical (integer code), 603 levels: 0=110 1=112 2=115 3=117 4=131 5=135 ... 602=__MISSING__
+- [20] max_glu_serum categorical (integer code), 4 levels: 0=>200 1=>300 2=Norm 3=nan
+- [21] A1Cresult   categorical (integer code), 4 levels: 0=>7 1=>8 2=Norm 3=nan
+- [22] metformin   categorical (integer code), 4 levels: 0=Down 1=No 2=Steady 3=Up
+- [23] repaglinide categorical (integer code), 4 levels: 0=Down 1=No 2=Steady 3=Up
+- [24] nateglinide categorical (integer code), 4 levels: 0=Down 1=No 2=Steady 3=Up
+- [25] chlorpropamide categorical (integer code), 3 levels: 0=No 1=Steady 2=Up
+- [26] glimepiride categorical (integer code), 4 levels: 0=Down 1=No 2=Steady 3=Up
+- [27] acetohexamide categorical (integer code), 1 levels: 0=No
+- [28] glipizide   categorical (integer code), 4 levels: 0=Down 1=No 2=Steady 3=Up
+- [29] glyburide   categorical (integer code), 4 levels: 0=Down 1=No 2=Steady 3=Up
+- [30] tolbutamide categorical (integer code), 2 levels: 0=No 1=Steady
+- [31] pioglitazone categorical (integer code), 4 levels: 0=Down 1=No 2=Steady 3=Up
+- [32] rosiglitazone categorical (integer code), 4 levels: 0=Down 1=No 2=Steady 3=Up
+- [33] acarbose    categorical (integer code), 3 levels: 0=No 1=Steady 2=Up
+- [34] miglitol    categorical (integer code), 3 levels: 0=Down 1=No 2=Steady
+- [35] troglitazone categorical (integer code), 1 levels: 0=No
+- [36] tolazamide  categorical (integer code), 2 levels: 0=No 1=Steady
+- [37] examide     categorical (integer code), 1 levels: 0=No
+- [38] citoglipton categorical (integer code), 1 levels: 0=No
+- [39] insulin     categorical (integer code), 4 levels: 0=Down 1=No 2=Steady 3=Up
+- [40] glyburide-metformin categorical (integer code), 3 levels: 0=No 1=Steady 2=Up
+- [41] glipizide-metformin categorical (integer code), 2 levels: 0=No 1=Steady
+- [42] glimepiride-pioglitazone categorical (integer code), 1 levels: 0=No
+- [43] metformin-rosiglitazone categorical (integer code), 1 levels: 0=No
+- [44] metformin-pioglitazone categorical (integer code), 1 levels: 0=No
+- [45] change      categorical (integer code), 2 levels: 0=Ch 1=No
+- [46] diabetesMed categorical (integer code), 2 levels: 0=No 1=Yes
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

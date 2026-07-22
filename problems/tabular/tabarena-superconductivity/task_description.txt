@@ -1,0 +1,116 @@
+TASK — TABULAR REGRESSION (tabarena-superconductivity)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return preds  # 1D float array, shape (len(X_query),)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] number_of_elements numeric
+- [1] mean_atomic_mass numeric
+- [2] wtd_mean_atomic_mass numeric
+- [3] gmean_atomic_mass numeric
+- [4] wtd_gmean_atomic_mass numeric
+- [5] entropy_atomic_mass numeric
+- [6] wtd_entropy_atomic_mass numeric
+- [7] range_atomic_mass numeric
+- [8] wtd_range_atomic_mass numeric
+- [9] std_atomic_mass numeric
+- [10] wtd_std_atomic_mass numeric
+- [11] mean_fie    numeric
+- [12] wtd_mean_fie numeric
+- [13] gmean_fie   numeric
+- [14] wtd_gmean_fie numeric
+- [15] entropy_fie numeric
+- [16] wtd_entropy_fie numeric
+- [17] range_fie   numeric
+- [18] wtd_range_fie numeric
+- [19] std_fie     numeric
+- [20] wtd_std_fie numeric
+- [21] mean_atomic_radius numeric
+- [22] wtd_mean_atomic_radius numeric
+- [23] gmean_atomic_radius numeric
+- [24] wtd_gmean_atomic_radius numeric
+- [25] entropy_atomic_radius numeric
+- [26] wtd_entropy_atomic_radius numeric
+- [27] range_atomic_radius numeric
+- [28] wtd_range_atomic_radius numeric
+- [29] std_atomic_radius numeric
+- [30] wtd_std_atomic_radius numeric
+- [31] mean_Density numeric
+- [32] wtd_mean_Density numeric
+- [33] gmean_Density numeric
+- [34] wtd_gmean_Density numeric
+- [35] entropy_Density numeric
+- [36] wtd_entropy_Density numeric
+- [37] range_Density numeric
+- [38] wtd_range_Density numeric
+- [39] std_Density numeric
+- [40] wtd_std_Density numeric
+- [41] mean_ElectronAffinity numeric
+- [42] wtd_mean_ElectronAffinity numeric
+- [43] gmean_ElectronAffinity numeric
+- [44] wtd_gmean_ElectronAffinity numeric
+- [45] entropy_ElectronAffinity numeric
+- [46] wtd_entropy_ElectronAffinity numeric
+- [47] range_ElectronAffinity numeric
+- [48] wtd_range_ElectronAffinity numeric
+- [49] std_ElectronAffinity numeric
+- [50] wtd_std_ElectronAffinity numeric
+- [51] mean_FusionHeat numeric
+- [52] wtd_mean_FusionHeat numeric
+- [53] gmean_FusionHeat numeric
+- [54] wtd_gmean_FusionHeat numeric
+- [55] entropy_FusionHeat numeric
+- [56] wtd_entropy_FusionHeat numeric
+- [57] range_FusionHeat numeric
+- [58] wtd_range_FusionHeat numeric
+- [59] std_FusionHeat numeric
+- [60] wtd_std_FusionHeat numeric
+- [61] mean_ThermalConductivity numeric
+- [62] wtd_mean_ThermalConductivity numeric
+- [63] gmean_ThermalConductivity numeric
+- [64] wtd_gmean_ThermalConductivity numeric
+- [65] entropy_ThermalConductivity numeric
+- [66] wtd_entropy_ThermalConductivity numeric
+- [67] range_ThermalConductivity numeric
+- [68] wtd_range_ThermalConductivity numeric
+- [69] std_ThermalConductivity numeric
+- [70] wtd_std_ThermalConductivity numeric
+- [71] mean_Valence numeric
+- [72] wtd_mean_Valence numeric
+- [73] gmean_Valence numeric
+- [74] wtd_gmean_Valence numeric
+- [75] entropy_Valence numeric
+- [76] wtd_entropy_Valence numeric
+- [77] range_Valence numeric
+- [78] wtd_range_Valence numeric
+- [79] std_Valence numeric
+- [80] wtd_std_Valence numeric
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- for a skewed target, consider a log/power transform of y and clip predictions back to the observed target range
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

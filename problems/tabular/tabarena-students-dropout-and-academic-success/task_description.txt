@@ -1,0 +1,71 @@
+TASK — TABULAR MULTICLASS CLASSIFICATION (tabarena-students-dropout-and-academic-success, 3 classes)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] Application_order numeric
+- [1] Previous_qualification_grade numeric
+- [2] Admission_grade numeric
+- [3] Age_at_enrollment numeric
+- [4] Curricular_units_1st_sem_credited numeric
+- [5] Curricular_units_1st_sem_enrolled numeric
+- [6] Curricular_units_1st_sem_evaluations numeric
+- [7] Curricular_units_1st_sem_approved numeric
+- [8] Curricular_units_1st_sem_grade numeric
+- [9] Curricular_units_1st_sem_without_evaluations numeric
+- [10] Curricular_units_2nd_sem_credited numeric
+- [11] Curricular_units_2nd_sem_enrolled numeric
+- [12] Curricular_units_2nd_sem_evaluations numeric
+- [13] Curricular_units_2nd_sem_approved numeric
+- [14] Curricular_units_2nd_sem_grade numeric
+- [15] Curricular_units_2nd_sem_without_evaluations numeric
+- [16] Unemployment_rate numeric
+- [17] Inflation_rate numeric
+- [18] GDP         numeric
+- [19] Marital_status categorical (integer code), 5 levels: 0=divorced 1=facto union 2=legally separated 3=married 4=single
+- [20] Application_mode categorical (integer code), 16 levels: 0=1st phase - general contingent 1=1st phase - special contingent (Azores Island) 2=1st phase - special contingent (Madeira Island) 3=2nd phase - general contingent 4=3rd phase - general contingent 5=Change of course 6=Change of institution/course 7=Holders of other higher courses 8=International student (bachelor) 9=Ordinance No. 533-A/99, item b2) (Different Plan) 10=Ordinance No. 612/93 11=Ordinance No. 854-B/99 12=Over 23 years old 13=Short cycle diploma holders 14=Technological specialization diploma holders 15=Transfer
+- [21] Course      categorical (integer code), 17 levels: 0=Advertising and Marketing Management 1=Agronomy 2=Animation and Multimedia Design 3=Basic Education 4=Biofuel Production Technologies 5=Communication Design 6=Equinculture 7=Informatics Engineering 8=Journalism and Communication 9=Management 10=Management (evening attendance) 11=Nursing 12=Oral Hygiene 13=Social Service 14=Social Service (evening attendance) 15=Tourism 16=Veterinary Nursing
+- [22] Daytimeevening_attendance categorical (integer code), 2 levels: 0=daytime 1=evening
+- [23] Previous_qualification categorical (integer code), 15 levels: 0=11th year of schooling - not completed 1=12th year of schooling - not completed 2=Basic education 2nd cycle (6th/7th/8th year) or equiv. 3=Basic education 3rd cycle (9th/10th/11th year) or equiv. 4=Frequency of higher education 5=Higher education - bachelor's degree 6=Higher education - degree 7=Higher education - degree (1st cycle) 8=Higher education - doctorate 9=Higher education - master (2nd cycle) 10=Higher education - master's 11=Other - 11th year of schooling 12=Professional higher technical course 13=Secondary education 14=Technological specialization course
+- [24] Nationality categorical (integer code), 14 levels: 0=Angolan 1=Brazilian 2=Cape Verdean 3=English 4=German 5=Guinean 6=Italian 7=Lithuanian 8=Mozambican 9=Portuguese 10=Romanian 11=Santomean 12=Spanish 13=Ukrainian
+- [25] Mothers_qualification categorical (integer code), 22 levels: 0=10th Year of Schooling 1=11th Year of Schooling - Not Completed 2=12th Year of Schooling - Not Completed 3=2nd cycle of the general high school course 4=9th Year of Schooling - Not Completed 5=Basic Education 2nd Cycle 6=Basic Education 3rd Cycle 7=Basic education 1st cycle (4th/5th year) or equiv. 8=Can read without having a 4th year of schooling 9=Frequency of Higher Education 10=Higher Education - Bachelor's Degree 11=Higher Education - Degree 12=Higher Education - Doctorate 13=Higher Education - Master (2nd cycle) 14=Higher Education - Master's 15=Higher education - degree (1st cycle) 16=Other - 11th Year of Schooling 17=Professional higher technical course 18=Secondary Education - 12th Year of Schooling or Eq. 19=Specialized higher studies course 20=Technological specialization course 21=Unknown
+- [26] Fathers_qualification categorical (integer code), 24 levels: 0=10th Year of Schooling 1=11th Year of Schooling - Not Completed 2=12th Year of Schooling - Not Completed 3=2nd cycle of the general high school course 4=2nd year complementary high school course 5=7th Year (Old) 6=7th year of schooling 7=8th year of schooling 8=Basic Education 2nd Cycle 9=Basic Education 3rd Cycle 10=Basic education 1st cycle 11=Can read without having a 4th year of schooling 12=Complementary High School Course 13=Higher Education - Bachelor's Degree 14=Higher Education - Degree 15=Higher Education - Doctorate 16=Higher Education - Master's 17=Higher education - degree (1st cycle) 18=Other - 11th Year of Schooling 19=Secondary Education - 12th Year of Schooling or Eq. 20=Specialized higher studies course 21=Technical-professional course 22=Technological specialization course 23=Unknown
+- [27] Mothers_occupation categorical (integer code), 27 levels: 0=(blank) 1=Administrative staff 2=Armed Forces Professions 3=Cleaning workers 4=Farmers and Skilled Workers 5=Food/woodworking workers 6=Health technicians 7=ICT Specialists 8=Installation and Machine Operators 9=Intermediate Level Technicians and Professions 10=Intermediate science and engineering technicians 11=Legal/social/cultural technicians 12=Meal preparation assistants 13=Office workers 14=Other Situation 15=Other administrative support 16=Personal Services, Security and Safety Workers and Sellers 17=Personal care workers 18=Personal service workers 19=Representatives of Legislative/Executive Bodies 20=Skilled Workers in Industry/Construction/Craftsmen 21=Specialists in Intellectual/Scientific Activities 22=Student 23=Teachers 24=Unskilled Workers 25=Unskilled agriculture workers 26=Unskilled construction workers
+- [28] Fathers_occupation categorical (integer code), 30 levels: 0=(blank) 1=Administrative staff 2=Armed Forces Professions 3=Armed Forces Sergeants 4=Assembly workers 5=Directors of administrative services 6=Farmers and Skilled Workers 7=Finance/administration specialists 8=Health professionals 9=Health technicians 10=ICT technicians 11=Installation and Machine Operators 12=Intermediate Level Technicians and Professions 13=Machine operators 14=Other Armed Forces personnel 15=Other Situation 16=Personal Services, Security and Safety Workers and Sellers 17=Personal service workers 18=Representatives of Legislative/Executive Bodies 19=Sellers 20=Skilled Workers in Industry/Construction/Craftsmen 21=Skilled construction workers 22=Specialists in Intellectual/Scientific Activities 23=Student 24=Subsistence farmers 25=Teachers 26=Unskilled Workers 27=Unskilled agriculture workers 28=Unskilled construction workers 29=Vehicle drivers
+- [29] Displaced   categorical (integer code), 2 levels: 0=no 1=yes
+- [30] Educational_special_needs categorical (integer code), 2 levels: 0=no 1=yes
+- [31] Debtor      categorical (integer code), 2 levels: 0=no 1=yes
+- [32] Tuition_fees_up_to_date categorical (integer code), 2 levels: 0=no 1=yes
+- [33] Gender      categorical (integer code), 2 levels: 0=female 1=male
+- [34] Scholarship_holder categorical (integer code), 2 levels: 0=no 1=yes
+- [35] International categorical (integer code), 2 levels: 0=no 1=yes
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated per-class probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

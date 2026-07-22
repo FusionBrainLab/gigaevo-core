@@ -1,0 +1,56 @@
+TASK — TABULAR BINARY CLASSIFICATION (tabarena-customer-satisfaction-in-airline)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] Age         numeric
+- [1] FlightDistance numeric
+- [2] Onlineboarding numeric
+- [3] DepartureDelayinMinutes numeric
+- [4] ArrivalDelayinMinutes numeric
+- [5] CustomerType categorical (integer code), 2 levels: 0=Loyal Customer 1=disloyal Customer
+- [6] TypeofTravel categorical (integer code), 2 levels: 0=Business travel 1=Personal Travel
+- [7] Class       categorical (integer code), 3 levels: 0=Business 1=Eco 2=Eco Plus
+- [8] Seatcomfort categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [9] DepartureArrivaltimeconvenient categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [10] Foodanddrink categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [11] Gatelocation categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [12] Inflightwifiservice categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [13] Inflightentertainment categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [14] Onlinesupport categorical (integer code), 5 levels: 0=1 1=2 2=3 3=4 4=5
+- [15] EaseofOnlinebooking categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [16] Onboardservice categorical (integer code), 5 levels: 0=1 1=2 2=3 3=4 4=5
+- [17] Legroomservice categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [18] Baggagehandling categorical (integer code), 5 levels: 0=1 1=2 2=3 3=4 4=5
+- [19] Checkinservice categorical (integer code), 5 levels: 0=1 1=2 2=3 3=4 4=5
+- [20] Cleanliness categorical (integer code), 5 levels: 0=1 1=2 2=3 3=4 4=5
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

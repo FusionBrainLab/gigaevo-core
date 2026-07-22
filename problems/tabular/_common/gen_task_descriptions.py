@@ -1,13 +1,17 @@
-"""Regenerate per-dataset task_description.txt from the dataset on disk.
+"""Materialize tabular problem directories from datasets on disk.
 
 Run once (with GIGAEVO_TABULAR_DATA set) after the dataset dirs exist:
     python problems/tabular/_common/gen_task_descriptions.py
+    python problems/tabular/_common/gen_task_descriptions.py --prefix tabarena-
 The generated column block enumerates categorical value vocabularies so a
 program can decode/one-hot the integer-coded categorical columns.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
+import os
 from pathlib import Path
 import sys
 
@@ -21,6 +25,7 @@ import tabular_data  # noqa: E402
 
 _TABULAR_ROOT = _HERE.parent
 _SEMANTICS_PATH = _HERE / "column_semantics.yaml"
+_DATA_ENV = "GIGAEVO_TABULAR_DATA"
 
 _DATASETS = {
     "regression": ["california", "house", "diamond", "black-friday", "microsoft"],
@@ -88,11 +93,48 @@ def _semantics() -> dict:
     return yaml.safe_load(_SEMANTICS_PATH.read_text()) or {}
 
 
+def _data_root() -> Path:
+    value = os.environ.get(_DATA_ENV)
+    if not value:
+        raise ValueError(f"{_DATA_ENV} must point at the tabular data root")
+    root = Path(value)
+    if not root.is_dir():
+        raise ValueError(f"{_DATA_ENV}={value!r} is not a directory")
+    return root
+
+
+def _dataset_info(name: str) -> dict:
+    return json.loads((_data_root() / name / "info.json").read_text())
+
+
+def _discover(prefix: str) -> dict[str, list[str]]:
+    datasets: dict[str, list[str]] = {task_type: [] for task_type in _SKELETON}
+    for folder in sorted(_data_root().iterdir()):
+        if not folder.is_dir() or not folder.name.startswith(prefix):
+            continue
+        info_path = folder / "info.json"
+        if not info_path.is_file():
+            continue
+        task_type = json.loads(info_path.read_text()).get("task_type")
+        if task_type not in datasets:
+            raise ValueError(f"{folder.name} has unsupported task_type={task_type!r}")
+        datasets[task_type].append(folder.name)
+    if not any(datasets.values()):
+        raise ValueError(f"no datasets with prefix {prefix!r} found in {_data_root()}")
+    return datasets
+
+
+def _metadata_columns(name: str) -> dict[int, dict[str, str]]:
+    names = _dataset_info(name).get("assembled_column_names") or []
+    return {index: {"name": str(value)} for index, value in enumerate(names)}
+
+
 def render(name: str, task_type: str) -> str:
     ds = tabular_data.load_dataset(name)
     header = _HEADERS[task_type].format(name=name, k=ds.n_classes)
     sem = _semantics().get(name) or {}
-    cols = tabular_data.describe_columns(name, names=sem.get("columns"))
+    column_metadata = sem.get("columns") or _metadata_columns(name)
+    cols = tabular_data.describe_columns(name, names=column_metadata)
     parts = [header, ""]
     if sem.get("source"):
         parts += [f"DATASET — {sem['source']}", ""]
@@ -120,13 +162,44 @@ def render(name: str, task_type: str) -> str:
     return "\n".join(parts) + "\n"
 
 
+def _ensure_link(path: Path, target: str, *, directory: bool = False) -> None:
+    if path.is_symlink():
+        if os.readlink(path) != target:
+            raise ValueError(
+                f"{path} points to {os.readlink(path)!r}, expected {target!r}"
+            )
+        return
+    if path.exists():
+        raise ValueError(f"refusing to replace existing {path}")
+    path.symlink_to(target, target_is_directory=directory)
+
+
+def materialize(name: str, task_type: str) -> Path:
+    out = _TABULAR_ROOT / name
+    out.mkdir(parents=True, exist_ok=True)
+    _ensure_link(out / "validate.py", "../_common/validate.py")
+    _ensure_link(out / "score_test.py", "../_common/score_test.py")
+    _ensure_link(out / "metrics.yaml", f"../_common/metrics_{task_type}.yaml")
+    _ensure_link(
+        out / "initial_programs",
+        f"../_common/seeds/{task_type}",
+        directory=True,
+    )
+    (out / "task_description.txt").write_text(render(name, task_type))
+    return out
+
+
 def main() -> int:
-    for task_type, names in _DATASETS.items():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--prefix", help="discover datasets with this prefix from the data root"
+    )
+    args = parser.parse_args()
+
+    datasets = _discover(args.prefix) if args.prefix else _DATASETS
+    for task_type, names in datasets.items():
         for name in names:
-            out = _TABULAR_ROOT / name / "task_description.txt"
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(render(name, task_type))
-            print(f"wrote {out}")
+            print(f"wrote {materialize(name, task_type)}")
     return 0
 
 

@@ -1,0 +1,99 @@
+TASK — TABULAR BINARY CLASSIFICATION (tabarena-polish-companies-bankruptcy)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] net_profit_to_total_assets numeric
+- [1] total_liabilities_to_total_assets numeric
+- [2] working_capital_to_total_assets numeric
+- [3] current_assets_to_short_term_liabilities numeric
+- [4] liquidity_days_ratio numeric
+- [5] retained_earnings_to_total_assets numeric
+- [6] ebit_to_total_assets numeric
+- [7] book_value_equity_to_total_liabilities numeric
+- [8] sales_to_total_assets numeric
+- [9] equity_to_total_assets numeric
+- [10] extended_profit_to_total_assets numeric
+- [11] gross_profit_to_short_term_liabilities numeric
+- [12] gross_profit_plus_depreciation_to_sales numeric
+- [13] gross_profit_plus_interest_to_total_assets numeric
+- [14] liabilities_days_ratio numeric
+- [15] gross_profit_plus_depreciation_to_total_liabilities numeric
+- [16] total_assets_to_total_liabilities numeric
+- [17] gross_profit_to_total_assets numeric
+- [18] gross_profit_to_sales numeric
+- [19] inventory_days_ratio numeric
+- [20] sales_growth_ratio numeric
+- [21] operating_profit_to_total_assets numeric
+- [22] net_profit_to_sales numeric
+- [23] three_year_gross_profit_to_total_assets numeric
+- [24] equity_minus_share_capital_to_total_assets numeric
+- [25] net_profit_plus_depreciation_to_total_liabilities numeric
+- [26] operating_profit_to_financial_expenses numeric
+- [27] working_capital_to_fixed_assets numeric
+- [28] log_total_assets numeric
+- [29] net_liabilities_to_sales numeric
+- [30] gross_profit_plus_interest_to_sales numeric
+- [31] current_liabilities_days_ratio numeric
+- [32] operating_expenses_to_short_term_liabilities numeric
+- [33] operating_expenses_to_total_liabilities numeric
+- [34] sales_profit_to_total_assets numeric
+- [35] total_sales_to_total_assets numeric
+- [36] current_assets_minus_inventories_to_long_term_liabilities numeric
+- [37] constant_capital_to_total_assets numeric
+- [38] sales_profit_to_sales numeric
+- [39] liquid_assets_to_short_term_liabilities numeric
+- [40] liabilities_to_adjusted_operating_profit numeric
+- [41] operating_profit_to_sales numeric
+- [42] receivables_plus_inventory_turnover_days numeric
+- [43] receivables_days_ratio numeric
+- [44] net_profit_to_inventory numeric
+- [45] current_assets_minus_inventory_to_short_term_liabilities numeric
+- [46] inventory_days_cost_ratio numeric
+- [47] ebitda_to_total_assets numeric
+- [48] ebitda_to_sales numeric
+- [49] current_assets_to_total_liabilities numeric
+- [50] short_term_liabilities_to_total_assets numeric
+- [51] short_term_liabilities_days_cost_ratio numeric
+- [52] equity_to_fixed_assets numeric
+- [53] constant_capital_to_fixed_assets numeric
+- [54] working_capital_absolute numeric
+- [55] gross_margin numeric
+- [56] adjusted_liquidity_ratio numeric
+- [57] total_costs_to_total_sales numeric
+- [58] long_term_liabilities_to_equity numeric
+- [59] inventory_turnover_ratio numeric
+- [60] receivables_turnover_ratio numeric
+- [61] short_term_liabilities_days_ratio numeric
+- [62] sales_to_short_term_liabilities numeric
+- [63] sales_to_fixed_assets numeric
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

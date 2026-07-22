@@ -1,0 +1,205 @@
+TASK — TABULAR BINARY CLASSIFICATION (tabarena-apsfailure)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] aa_000      numeric
+- [1] ab_000      numeric
+- [2] ac_000      numeric
+- [3] ad_000      numeric
+- [4] ae_000      numeric
+- [5] af_000      numeric
+- [6] ag_000      numeric
+- [7] ag_001      numeric
+- [8] ag_002      numeric
+- [9] ag_003      numeric
+- [10] ag_004      numeric
+- [11] ag_005      numeric
+- [12] ag_006      numeric
+- [13] ag_007      numeric
+- [14] ag_008      numeric
+- [15] ag_009      numeric
+- [16] ah_000      numeric
+- [17] ai_000      numeric
+- [18] aj_000      numeric
+- [19] ak_000      numeric
+- [20] al_000      numeric
+- [21] am_0        numeric
+- [22] an_000      numeric
+- [23] ao_000      numeric
+- [24] ap_000      numeric
+- [25] aq_000      numeric
+- [26] ar_000      numeric
+- [27] as_000      numeric
+- [28] at_000      numeric
+- [29] au_000      numeric
+- [30] av_000      numeric
+- [31] ax_000      numeric
+- [32] ay_000      numeric
+- [33] ay_001      numeric
+- [34] ay_002      numeric
+- [35] ay_003      numeric
+- [36] ay_004      numeric
+- [37] ay_005      numeric
+- [38] ay_006      numeric
+- [39] ay_007      numeric
+- [40] ay_008      numeric
+- [41] ay_009      numeric
+- [42] az_000      numeric
+- [43] az_001      numeric
+- [44] az_002      numeric
+- [45] az_003      numeric
+- [46] az_004      numeric
+- [47] az_005      numeric
+- [48] az_006      numeric
+- [49] az_007      numeric
+- [50] az_008      numeric
+- [51] az_009      numeric
+- [52] ba_000      numeric
+- [53] ba_001      numeric
+- [54] ba_002      numeric
+- [55] ba_003      numeric
+- [56] ba_004      numeric
+- [57] ba_005      numeric
+- [58] ba_006      numeric
+- [59] ba_007      numeric
+- [60] ba_008      numeric
+- [61] ba_009      numeric
+- [62] bb_000      numeric
+- [63] bc_000      numeric
+- [64] bd_000      numeric
+- [65] be_000      numeric
+- [66] bf_000      numeric
+- [67] bg_000      numeric
+- [68] bh_000      numeric
+- [69] bi_000      numeric
+- [70] bj_000      numeric
+- [71] bk_000      numeric
+- [72] bl_000      numeric
+- [73] bm_000      numeric
+- [74] bn_000      numeric
+- [75] bo_000      numeric
+- [76] bp_000      numeric
+- [77] bq_000      numeric
+- [78] br_000      numeric
+- [79] bs_000      numeric
+- [80] bt_000      numeric
+- [81] bu_000      numeric
+- [82] bv_000      numeric
+- [83] bx_000      numeric
+- [84] by_000      numeric
+- [85] bz_000      numeric
+- [86] ca_000      numeric
+- [87] cb_000      numeric
+- [88] cc_000      numeric
+- [89] cd_000      numeric
+- [90] ce_000      numeric
+- [91] cf_000      numeric
+- [92] cg_000      numeric
+- [93] ch_000      numeric
+- [94] ci_000      numeric
+- [95] cj_000      numeric
+- [96] ck_000      numeric
+- [97] cl_000      numeric
+- [98] cm_000      numeric
+- [99] cn_000      numeric
+- [100] cn_001      numeric
+- [101] cn_002      numeric
+- [102] cn_003      numeric
+- [103] cn_004      numeric
+- [104] cn_005      numeric
+- [105] cn_006      numeric
+- [106] cn_007      numeric
+- [107] cn_008      numeric
+- [108] cn_009      numeric
+- [109] co_000      numeric
+- [110] cp_000      numeric
+- [111] cq_000      numeric
+- [112] cr_000      numeric
+- [113] cs_000      numeric
+- [114] cs_001      numeric
+- [115] cs_002      numeric
+- [116] cs_003      numeric
+- [117] cs_004      numeric
+- [118] cs_005      numeric
+- [119] cs_006      numeric
+- [120] cs_007      numeric
+- [121] cs_008      numeric
+- [122] cs_009      numeric
+- [123] ct_000      numeric
+- [124] cu_000      numeric
+- [125] cv_000      numeric
+- [126] cx_000      numeric
+- [127] cy_000      numeric
+- [128] cz_000      numeric
+- [129] da_000      numeric
+- [130] db_000      numeric
+- [131] dc_000      numeric
+- [132] dd_000      numeric
+- [133] de_000      numeric
+- [134] df_000      numeric
+- [135] dg_000      numeric
+- [136] dh_000      numeric
+- [137] di_000      numeric
+- [138] dj_000      numeric
+- [139] dk_000      numeric
+- [140] dl_000      numeric
+- [141] dm_000      numeric
+- [142] dn_000      numeric
+- [143] do_000      numeric
+- [144] dp_000      numeric
+- [145] dq_000      numeric
+- [146] dr_000      numeric
+- [147] ds_000      numeric
+- [148] dt_000      numeric
+- [149] du_000      numeric
+- [150] dv_000      numeric
+- [151] dx_000      numeric
+- [152] dy_000      numeric
+- [153] dz_000      numeric
+- [154] ea_000      numeric
+- [155] eb_000      numeric
+- [156] ec_00       numeric
+- [157] ed_000      numeric
+- [158] ee_000      numeric
+- [159] ee_001      numeric
+- [160] ee_002      numeric
+- [161] ee_003      numeric
+- [162] ee_004      numeric
+- [163] ee_005      numeric
+- [164] ee_006      numeric
+- [165] ee_007      numeric
+- [166] ee_008      numeric
+- [167] ee_009      numeric
+- [168] ef_000      numeric
+- [169] eg_000      numeric
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

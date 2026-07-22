@@ -1,0 +1,247 @@
+TASK — TABULAR BINARY CLASSIFICATION (tabarena-kddcup09-appetency)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] Var1        numeric
+- [1] Var2        numeric
+- [2] Var3        numeric
+- [3] Var4        numeric
+- [4] Var5        numeric
+- [5] Var6        numeric
+- [6] Var7        numeric
+- [7] Var9        numeric
+- [8] Var10       numeric
+- [9] Var11       numeric
+- [10] Var12       numeric
+- [11] Var13       numeric
+- [12] Var14       numeric
+- [13] Var16       numeric
+- [14] Var17       numeric
+- [15] Var18       numeric
+- [16] Var19       numeric
+- [17] Var21       numeric
+- [18] Var22       numeric
+- [19] Var23       numeric
+- [20] Var24       numeric
+- [21] Var25       numeric
+- [22] Var26       numeric
+- [23] Var27       numeric
+- [24] Var28       numeric
+- [25] Var29       numeric
+- [26] Var30       numeric
+- [27] Var33       numeric
+- [28] Var34       numeric
+- [29] Var35       numeric
+- [30] Var36       numeric
+- [31] Var37       numeric
+- [32] Var38       numeric
+- [33] Var40       numeric
+- [34] Var41       numeric
+- [35] Var43       numeric
+- [36] Var44       numeric
+- [37] Var45       numeric
+- [38] Var46       numeric
+- [39] Var47       numeric
+- [40] Var49       numeric
+- [41] Var50       numeric
+- [42] Var51       numeric
+- [43] Var53       numeric
+- [44] Var54       numeric
+- [45] Var56       numeric
+- [46] Var57       numeric
+- [47] Var58       numeric
+- [48] Var59       numeric
+- [49] Var60       numeric
+- [50] Var61       numeric
+- [51] Var62       numeric
+- [52] Var63       numeric
+- [53] Var64       numeric
+- [54] Var65       numeric
+- [55] Var66       numeric
+- [56] Var67       numeric
+- [57] Var68       numeric
+- [58] Var69       numeric
+- [59] Var70       numeric
+- [60] Var71       numeric
+- [61] Var72       numeric
+- [62] Var73       numeric
+- [63] Var74       numeric
+- [64] Var75       numeric
+- [65] Var76       numeric
+- [66] Var77       numeric
+- [67] Var78       numeric
+- [68] Var80       numeric
+- [69] Var81       numeric
+- [70] Var82       numeric
+- [71] Var83       numeric
+- [72] Var84       numeric
+- [73] Var85       numeric
+- [74] Var86       numeric
+- [75] Var87       numeric
+- [76] Var88       numeric
+- [77] Var89       numeric
+- [78] Var90       numeric
+- [79] Var91       numeric
+- [80] Var92       numeric
+- [81] Var93       numeric
+- [82] Var94       numeric
+- [83] Var95       numeric
+- [84] Var96       numeric
+- [85] Var97       numeric
+- [86] Var98       numeric
+- [87] Var99       numeric
+- [88] Var100      numeric
+- [89] Var101      numeric
+- [90] Var102      numeric
+- [91] Var103      numeric
+- [92] Var104      numeric
+- [93] Var105      numeric
+- [94] Var106      numeric
+- [95] Var107      numeric
+- [96] Var108      numeric
+- [97] Var109      numeric
+- [98] Var110      numeric
+- [99] Var111      numeric
+- [100] Var112      numeric
+- [101] Var113      numeric
+- [102] Var114      numeric
+- [103] Var115      numeric
+- [104] Var116      numeric
+- [105] Var117      numeric
+- [106] Var118      numeric
+- [107] Var119      numeric
+- [108] Var120      numeric
+- [109] Var121      numeric
+- [110] Var122      numeric
+- [111] Var123      numeric
+- [112] Var124      numeric
+- [113] Var125      numeric
+- [114] Var126      numeric
+- [115] Var127      numeric
+- [116] Var128      numeric
+- [117] Var129      numeric
+- [118] Var130      numeric
+- [119] Var131      numeric
+- [120] Var132      numeric
+- [121] Var133      numeric
+- [122] Var134      numeric
+- [123] Var135      numeric
+- [124] Var136      numeric
+- [125] Var137      numeric
+- [126] Var138      numeric
+- [127] Var139      numeric
+- [128] Var140      numeric
+- [129] Var142      numeric
+- [130] Var143      numeric
+- [131] Var144      numeric
+- [132] Var145      numeric
+- [133] Var146      numeric
+- [134] Var147      numeric
+- [135] Var148      numeric
+- [136] Var149      numeric
+- [137] Var150      numeric
+- [138] Var151      numeric
+- [139] Var152      numeric
+- [140] Var153      numeric
+- [141] Var154      numeric
+- [142] Var155      numeric
+- [143] Var156      numeric
+- [144] Var157      numeric
+- [145] Var158      numeric
+- [146] Var159      numeric
+- [147] Var160      numeric
+- [148] Var161      numeric
+- [149] Var162      numeric
+- [150] Var163      numeric
+- [151] Var164      numeric
+- [152] Var165      numeric
+- [153] Var166      numeric
+- [154] Var168      numeric
+- [155] Var170      numeric
+- [156] Var171      numeric
+- [157] Var172      numeric
+- [158] Var173      numeric
+- [159] Var174      numeric
+- [160] Var176      numeric
+- [161] Var177      numeric
+- [162] Var178      numeric
+- [163] Var179      numeric
+- [164] Var180      numeric
+- [165] Var181      numeric
+- [166] Var182      numeric
+- [167] Var183      numeric
+- [168] Var184      numeric
+- [169] Var186      numeric
+- [170] Var187      numeric
+- [171] Var188      numeric
+- [172] Var189      numeric
+- [173] Var190      numeric
+- [174] Var191      categorical (integer code), 2 levels: 0=nan 1=r__I
+- [175] Var192      categorical (integer code), 311 levels: 0=0G9vyxdMWg 1=0vimfo8zhV 2=1GdOj17ejg 3=1GdOj1KXzC 4=1JGTmBQZiT 5=1JGqrQKzJV ... 310=zcRZptzip9
+- [176] Var193      categorical (integer code), 42 levels: 0=2Knk1KF 1=2wnefc9ISdLjfQoAYBI 2=5QKIjwyXr4MCZTEp7uAkS8PtBLcn 3=8kO9LslBGNXoLvWEuN6tPuN59TdYxfL9Sm6oU 4=9U2tunPAje3TwfLLUQxzM3dC1ghn 5=AERks4l ... 41=zPhCMhkz9XiOF7LgT9VfJZ3yI
+- [177] Var194      categorical (integer code), 4 levels: 0=CTUH 1=SEuy 2=lvza 3=nan
+- [178] Var195      categorical (integer code), 20 levels: 0=ArtjQZ8ftr3NB 1=ArtjQZQO1r9fC 2=ArtjQZmIvr94p 3=CiJDdr4TQ0rGERIS 4=CiJsoa4TQ0rGHlMp 5=CuXi4je 6=F1JQrEL 7=I9xt3GBDKUbd8 8=I9xt3GDRhUK7p 9=I9xt3GMcxUnBZ 10=I9xt3Gi01UK7p 11=LfvqpCtLOY 12=TnJpfvsJgF 13=ZZBPiZh 14=b_3Q 15=bsZtYxFjzA 16=ev6I 17=hiMqnEM7VgIk4JUu 18=lSbpiq1 19=taul
+- [179] Var196      categorical (integer code), 3 levels: 0=1K8T 1=JA1C 2=z3mO
+- [180] Var197      categorical (integer code), 196 levels: 0=0LaQ 1=0WHw 2=0Xwj 3=0Y9G 4=0YIT 5=0aHy ... 195=z8at
+- [181] Var198      categorical (integer code), 2598 levels: 0=02sXzfW 1=05vXEFX 2=05vYdIL 3=05vx4QS 4=06Xs45W 5=07LAmkt ... 2597=zmMlkJq
+- [182] Var199      categorical (integer code), 2448 levels: 0=00J8E9a 1=00JHTSP 2=01rm9q25A_xEj 3=03dnv4GDcc 4=0GVNOCB 5=0IWZqtp ... 2447=zyR5BuUrkb8I9Lth
+- [183] Var200      categorical (integer code), 6852 levels: 0=01kFO1M 1=01kLdzZ 2=02hHpkL 3=04t2bXJ 4=04t4b4h 5=04t71Bb ... 6851=zxbiUTi
+- [184] Var201      categorical (integer code), 3 levels: 0=6dX3 1=nan 2=smXZ
+- [185] Var202      categorical (integer code), 4533 levels: 0=0062 1=00AD 2=0152 3=01Id 4=01br 5=02fP ... 4532=zz34
+- [186] Var203      categorical (integer code), 6 levels: 0=9_Y1 1=F3hy 2=HLqf 3=dgxZ 4=nan 5=pybr
+- [187] Var204      categorical (integer code), 100 levels: 0=000J 1=0A_v 2=15m3 3=1Bp0 4=3NyY 5=47ra ... 99=zfpA
+- [188] Var205      categorical (integer code), 4 levels: 0=09_Q 1=VpdQ 2=nan 3=sJzTlal
+- [189] Var206      categorical (integer code), 22 levels: 0=409L 1=43pnToF 2=69fI 3=6JmL 4=CoYW 5=G_zk 6=IYzP 7=TIA9 8=Tkho 9=giwq 10=hAFG 11=haYg 12=hzlB 13=itlM 14=kxE9 15=lVqb 16=nan 17=oZyB 18=sYC_ 19=wMei 20=y6dw 21=zm5i
+- [190] Var207      categorical (integer code), 12 levels: 0=0MCPoln 1=15TtzZrRt2 2=5iay 3=6C53VA1kCv 4=7M47J5GA0pTYIFxg5uy 5=DHn_WUyBhW_whjA88g9bvA64_ 6=EBKcR3s6B22tD6gC36gm6S 7=GjJ35utlTa_GNSvxxpb9ju 8=Kxdu 9=NKv3VA1BpP 10=me75fM6ugJ 11=wXfldy7
+- [191] Var208      categorical (integer code), 3 levels: 0=kIsH 1=nan 2=sBgB
+- [192] Var210      categorical (integer code), 6 levels: 0=3av_ 1=7A3j 2=DM_V 3=g5HH 4=oT7d 5=uKAI
+- [193] Var211      categorical (integer code), 2 levels: 0=L84s 1=Mtgm
+- [194] Var212      categorical (integer code), 68 levels: 0=0ufvj1SlEJJXp 1=1YxyYTLbzthWO 2=3DU5ycSrJHCaC 3=4kVnq_T26xq1p 4=4ylQpLr46xum2hHQ 5=5gZdPPT4kHWmT ... 67=zz1zifk
+- [195] Var213      categorical (integer code), 2 levels: 0=KdSa 1=nan
+- [196] Var214      categorical (integer code), 6852 levels: 0=00TGzAM 1=00TNuBd 2=00TTUHO 3=01X8wKP 4=02aY6fc 5=03CVkgP ... 6851=zzfLM_S
+- [197] Var215      categorical (integer code), 2 levels: 0=eGzu 1=nan
+- [198] Var216      categorical (integer code), 1201 levels: 0=11p0d_e 1=11p3sk4 2=11p4cJh 3=11p4cb7 4=11p4mKe 5=11pEY2j ... 1200=y5Fzn1t
+- [199] Var217      categorical (integer code), 7473 levels: 0=00L3 1=015k 2=01cV 3=01wd 4=01zb 5=03_p ... 7472=zzQV
+- [200] Var218      categorical (integer code), 3 levels: 0=UYBR 1=cJvF 2=nan
+- [201] Var219      categorical (integer code), 20 levels: 0=49W0rUY 1=49W9HeL 2=6krWwfF 3=AT1N 4=AU8KzzF 5=AU8OvAe 6=AU8_WTd 7=AU8ltHK 8=AU8pNoi 9=FQHxeR8 10=FqMWi1g 11=FzaX 12=JdAM 13=Lmli 14=OFWH 15=nan 16=qxDb 17=tdJW_Pm 18=wwPEXoilkr 19=ylgWTXl
+- [202] Var220      categorical (integer code), 2598 levels: 0=07m8iqZ 1=07mQFkJ 2=07mVy8V 3=07mmFX7 4=07mmflk 5=0AJo2f2 ... 2597=zxmVxx9
+- [203] Var221      categorical (integer code), 7 levels: 0=Al6ZaUT 1=JIiEFBU 2=QKW8DRm 3=d0EEeJi 4=oslk 5=z4pH 6=zCkv
+- [204] Var222      categorical (integer code), 2598 levels: 0=00ARusu 1=00AhP4J 2=017QQMs 3=017QhSV 4=017mPWC 5=017qMJU ... 2597=zwFAGfT
+- [205] Var223      categorical (integer code), 5 levels: 0=LM8l689qOp 1=M_8D 2=bCPvVye 3=jySVZNlOJy 4=nan
+- [206] Var224      categorical (integer code), 2 levels: 0=4n2X 1=nan
+- [207] Var225      categorical (integer code), 4 levels: 0=ELof 1=kG3k 2=nan 3=xG3x
+- [208] Var226      categorical (integer code), 23 levels: 0=3Cy4 1=453m 2=5Acm 3=7FJQ 4=7P5s 5=7aLG 6=Aoh3 7=FSa2 8=PM2D 9=Qcbd 10=Qu4f 11=TNEC 12=WqMG 13=Xa3G 14=fKCe 15=kwS7 16=me1d 17=rgKb 18=szEZ 19=uWr3 20=wX53 21=w_Ub 22=xb3V
+- [209] Var227      categorical (integer code), 7 levels: 0=02N6s8f 1=6fzt 2=RAYp 3=ZI9m 4=nIGXDli 5=nIGjgSB 6=vJ_w8kB
+- [210] Var228      categorical (integer code), 29 levels: 0=0pzBWGkV3fbsGZN52DH 1=4rd_ 2=55YFVY9 3=5oZS 4=6nxx00q6gnIF8ePJ3P3AEfZ1N 5=9VmiOykV3fbsAg65e4w 6=DU8B 7=F2FcTt7IdMT_v 8=F2FyR07IdsN7I 9=JnGLH58smNxIYcGK39k 10=NoEd 11=R4y5gQQWY8OodqDV 12=RjBDiL8f9CQYc21fICscNNpj6 13=SbOd7O8ky1wGNxp0Arj0Xs 14=TCU50_Yjmm6GIBZ0lL_ 15=VjDE 16=WfJ2BB2SFSqauljlfOB 17=WfJYmPMksSqa1pajvfG 18=ZeaF 19=Zy3gnGM 20=_cTCyH95OE93jSkoIBT 21=am14IcfM7tWLrUmRT52KtA 22=b9qbUNk0dML_Mvi2 23=d0LtHjWeaXyArdN4sxU_saXqH 24=ib5G6X1eUxUn6 25=iyHGyLCEkQ 26=n1OBWGkV3fbsHR75taC 27=r_7E 28=xwM2aC7IdeMC0
+- [211] Var229      categorical (integer code), 5 levels: 0=am7c 1=mj86 2=nan 3=oJmt 4=sk2h
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

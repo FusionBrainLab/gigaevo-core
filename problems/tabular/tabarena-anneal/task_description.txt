@@ -1,0 +1,73 @@
+TASK — TABULAR MULTICLASS CLASSIFICATION (tabarena-anneal, 5 classes)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] carbon      numeric
+- [1] hardness    numeric
+- [2] strength    numeric
+- [3] thick       numeric
+- [4] width       numeric
+- [5] len         numeric
+- [6] family      categorical (integer code), 3 levels: 0=TN 1=ZS 2=not_applicable
+- [7] product-type categorical (integer code), 1 levels: 0=C
+- [8] steel       categorical (integer code), 8 levels: 0=A 1=K 2=M 3=R 4=S 5=V 6=W 7=not_applicable
+- [9] temper_rolling categorical (integer code), 2 levels: 0=T 1=not_applicable
+- [10] condition   categorical (integer code), 3 levels: 0=A 1=S 2=not_applicable
+- [11] formability categorical (integer code), 5 levels: 0=1 1=2 2=3 3=5 4=not_applicable
+- [12] non-ageing  categorical (integer code), 2 levels: 0=N 1=not_applicable
+- [13] surface-finish categorical (integer code), 2 levels: 0=P 1=not_applicable
+- [14] surface-quality categorical (integer code), 5 levels: 0=D 1=E 2=F 3=G 4=not_applicable
+- [15] enamelability categorical (integer code), 3 levels: 0=1 1=2 2=not_applicable
+- [16] bc          categorical (integer code), 2 levels: 0=Y 1=not_applicable
+- [17] bf          categorical (integer code), 2 levels: 0=Y 1=not_applicable
+- [18] bt          categorical (integer code), 2 levels: 0=Y 1=not_applicable
+- [19] bw_me       categorical (integer code), 3 levels: 0=B 1=M 2=not_applicable
+- [20] bl          categorical (integer code), 2 levels: 0=Y 1=not_applicable
+- [21] m           categorical (integer code), 1 levels: 0=not_applicable
+- [22] chrom       categorical (integer code), 2 levels: 0=C 1=not_applicable
+- [23] phos        categorical (integer code), 2 levels: 0=P 1=not_applicable
+- [24] cbond       categorical (integer code), 2 levels: 0=Y 1=not_applicable
+- [25] marvi       categorical (integer code), 1 levels: 0=not_applicable
+- [26] exptl       categorical (integer code), 2 levels: 0=Y 1=not_applicable
+- [27] ferro       categorical (integer code), 2 levels: 0=Y 1=not_applicable
+- [28] corr        categorical (integer code), 1 levels: 0=not_applicable
+- [29] blue_bright_varn_clean categorical (integer code), 2 levels: 0=V 1=not_applicable
+- [30] lustre      categorical (integer code), 2 levels: 0=Y 1=not_applicable
+- [31] jurofm      categorical (integer code), 1 levels: 0=not_applicable
+- [32] s           categorical (integer code), 1 levels: 0=not_applicable
+- [33] p           categorical (integer code), 1 levels: 0=not_applicable
+- [34] shape       categorical (integer code), 2 levels: 0=COIL 1=SHEET
+- [35] oil         categorical (integer code), 3 levels: 0=N 1=Y 2=not_applicable
+- [36] bore        categorical (integer code), 3 levels: 0=0 1=500 2=600
+- [37] packing     categorical (integer code), 2 levels: 0=3 1=not_applicable
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated per-class probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

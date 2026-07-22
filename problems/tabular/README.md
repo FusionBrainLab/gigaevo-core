@@ -39,6 +39,8 @@ roles.
 ```bash
 uvx --from openml python problems/tabular/_common/import_tabarena.py /some/dir/data \
   --openml-cache /some/dir/tabarena-openml
+GIGAEVO_TABULAR_DATA=/some/dir/data \
+  python problems/tabular/_common/gen_task_descriptions.py --prefix tabarena-
 ```
 
 Imported IDs are prefixed `tabarena-`. Full TabArena scores aggregate 9–30
@@ -61,8 +63,9 @@ outer splits per dataset; these single-view datasets must be reported as
 | tabular/otto          | multiclass  | 93/0/0                 | 9       | CV     |
 | tabular/covtype2      | multiclass  | 10/1/4                 | 7       | holdout|
 
-CV (k from `GIGAEVO_TABULAR_CV_FOLDS`, default 3) when `train_size <=
-GIGAEVO_TABULAR_CV_MAX` (default 100000), else a single 80/20 holdout.
+CV uses `GIGAEVO_TABULAR_CV_FOLDS` (default 3) when the combined train and
+validation size is at most `GIGAEVO_TABULAR_CV_MAX` (default 100000), else a
+single 80/20 holdout.
 
 ## Program contract
 
@@ -95,6 +98,9 @@ OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
 python run.py problem.name=tabular/california algorithm=tabular/2d_local_ood
 ```
 
+For example, replace the problem with
+`problem.name=tabular/tabarena-airfoil-self-noise` to run its r0f0 view.
+
 End-of-evolution test scoring (never a search signal):
 
 ```bash
@@ -102,13 +108,15 @@ GIGAEVO_TABULAR_DATA=/some/dir/data \
 python problems/tabular/california/score_test.py problems/tabular/california/initial_programs/prog1.py
 ```
 
-## Regenerating task descriptions
+## Materializing problem directories
 
-`task_description.txt` files are generated from the data:
+Problem wrappers and `task_description.txt` files are generated from the data:
 
 ```bash
 GIGAEVO_TABULAR_DATA=/some/dir/data \
 python problems/tabular/_common/gen_task_descriptions.py
 ```
+
+Use `--prefix tabarena-` for all imported TabArena datasets.
 
 (`california`'s numeric feature names are hand-added on top of the generated block.)

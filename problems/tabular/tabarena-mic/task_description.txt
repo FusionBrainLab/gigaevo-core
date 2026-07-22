@@ -1,0 +1,146 @@
+TASK — TABULAR MULTICLASS CLASSIFICATION (tabarena-mic, 8 classes)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] AGE         numeric
+- [1] S_AD_KBRIG  numeric
+- [2] D_AD_KBRIG  numeric
+- [3] S_AD_ORIT   numeric
+- [4] D_AD_ORIT   numeric
+- [5] K_BLOOD     numeric
+- [6] NA_BLOOD    numeric
+- [7] ALT_BLOOD   numeric
+- [8] AST_BLOOD   numeric
+- [9] KFK_BLOOD   numeric
+- [10] L_BLOOD     numeric
+- [11] ROE         numeric
+- [12] NA_R_1_n    numeric
+- [13] NA_R_2_n    numeric
+- [14] NA_R_3_n    numeric
+- [15] NOT_NA_2_n  numeric
+- [16] NOT_NA_3_n  numeric
+- [17] SEX         categorical (integer code), 2 levels: 0=0 1=1
+- [18] INF_ANAM    categorical (integer code), 4 levels: 0=0.0 1=1.0 2=2.0 3=3.0
+- [19] STENOK_AN   categorical (integer code), 8 levels: 0=0.0 1=1.0 2=2.0 3=3.0 4=4.0 5=5.0 6=6.0 7=nan
+- [20] FK_STENOK   categorical (integer code), 6 levels: 0=0.0 1=1.0 2=2.0 3=3.0 4=4.0 5=nan
+- [21] IBS_POST    categorical (integer code), 4 levels: 0=0.0 1=1.0 2=2.0 3=nan
+- [22] IBS_NASL    categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [23] GB          categorical (integer code), 5 levels: 0=0.0 1=1.0 2=2.0 3=3.0 4=nan
+- [24] SIM_GIPERT  categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [25] DLIT_AG     categorical (integer code), 9 levels: 0=0.0 1=1.0 2=2.0 3=3.0 4=4.0 5=5.0 6=6.0 7=7.0 8=nan
+- [26] ZSN_A       categorical (integer code), 6 levels: 0=0.0 1=1.0 2=2.0 3=3.0 4=4.0 5=nan
+- [27] nr_11       categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [28] nr_01       categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [29] nr_02       categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [30] nr_03       categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [31] nr_04       categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [32] nr_07       categorical (integer code), 2 levels: 0=0.0 1=nan
+- [33] nr_08       categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [34] np_01       categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [35] np_04       categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [36] np_05       categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [37] np_07       categorical (integer code), 2 levels: 0=0.0 1=nan
+- [38] np_08       categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [39] np_09       categorical (integer code), 2 levels: 0=0.0 1=nan
+- [40] np_10       categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [41] endocr_01   categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [42] endocr_02   categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [43] endocr_03   categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [44] zab_leg_01  categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [45] zab_leg_02  categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [46] zab_leg_03  categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [47] zab_leg_04  categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [48] zab_leg_06  categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [49] O_L_POST    categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [50] K_SH_POST   categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [51] MP_TP_POST  categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [52] SVT_POST    categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [53] GT_POST     categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [54] FIB_G_POST  categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [55] ant_im      categorical (integer code), 6 levels: 0=0.0 1=1.0 2=2.0 3=3.0 4=4.0 5=nan
+- [56] lat_im      categorical (integer code), 6 levels: 0=0.0 1=1.0 2=2.0 3=3.0 4=4.0 5=nan
+- [57] inf_im      categorical (integer code), 6 levels: 0=0.0 1=1.0 2=2.0 3=3.0 4=4.0 5=nan
+- [58] post_im     categorical (integer code), 6 levels: 0=0.0 1=1.0 2=2.0 3=3.0 4=4.0 5=nan
+- [59] IM_PG_P     categorical (integer code), 2 levels: 0=0.0 1=1.0
+- [60] ritm_ecg_p_01 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [61] ritm_ecg_p_02 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [62] ritm_ecg_p_04 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [63] ritm_ecg_p_06 categorical (integer code), 2 levels: 0=0.0 1=nan
+- [64] ritm_ecg_p_07 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [65] ritm_ecg_p_08 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [66] n_r_ecg_p_01 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [67] n_r_ecg_p_02 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [68] n_r_ecg_p_03 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [69] n_r_ecg_p_04 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [70] n_r_ecg_p_05 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [71] n_r_ecg_p_06 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [72] n_r_ecg_p_08 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [73] n_r_ecg_p_09 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [74] n_r_ecg_p_10 categorical (integer code), 2 levels: 0=0.0 1=nan
+- [75] n_p_ecg_p_01 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [76] n_p_ecg_p_03 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [77] n_p_ecg_p_04 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [78] n_p_ecg_p_05 categorical (integer code), 2 levels: 0=0.0 1=nan
+- [79] n_p_ecg_p_06 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [80] n_p_ecg_p_07 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [81] n_p_ecg_p_08 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [82] n_p_ecg_p_09 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [83] n_p_ecg_p_10 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [84] n_p_ecg_p_11 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [85] n_p_ecg_p_12 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [86] fibr_ter_01 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [87] fibr_ter_02 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [88] fibr_ter_03 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [89] fibr_ter_05 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [90] fibr_ter_06 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [91] fibr_ter_07 categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [92] fibr_ter_08 categorical (integer code), 2 levels: 0=0.0 1=nan
+- [93] GIPO_K      categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [94] GIPER_NA    categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [95] TIME_B_S    categorical (integer code), 10 levels: 0=1.0 1=2.0 2=3.0 3=4.0 4=5.0 5=6.0 6=7.0 7=8.0 8=9.0 9=nan
+- [96] R_AB_1_n    categorical (integer code), 5 levels: 0=0.0 1=1.0 2=2.0 3=3.0 4=nan
+- [97] R_AB_2_n    categorical (integer code), 5 levels: 0=0.0 1=1.0 2=2.0 3=3.0 4=nan
+- [98] R_AB_3_n    categorical (integer code), 5 levels: 0=0.0 1=1.0 2=2.0 3=3.0 4=nan
+- [99] NA_KB       categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [100] NOT_NA_KB   categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [101] LID_KB      categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [102] NITR_S      categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [103] NOT_NA_1_n  categorical (integer code), 6 levels: 0=0.0 1=1.0 2=2.0 3=3.0 4=4.0 5=nan
+- [104] LID_S_n     categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [105] B_BLOK_S_n  categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [106] ANT_CA_S_n  categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [107] GEPAR_S_n   categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [108] ASP_S_n     categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [109] TIKL_S_n    categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+- [110] TRENT_S_n   categorical (integer code), 3 levels: 0=0.0 1=1.0 2=nan
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated per-class probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

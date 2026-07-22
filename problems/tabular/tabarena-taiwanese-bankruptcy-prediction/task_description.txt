@@ -1,0 +1,129 @@
+TASK — TABULAR BINARY CLASSIFICATION (tabarena-taiwanese-bankruptcy-prediction)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] ROA_C_Before_Interest_Depreciation numeric
+- [1] ROA_A_Before_Interest_After_Tax numeric
+- [2] ROA_B_Before_Interest_Depreciation_After_Tax numeric
+- [3] Operating_Gross_Margin numeric
+- [4] Realized_Sales_Gross_Margin numeric
+- [5] Operating_Profit_Rate numeric
+- [6] PreTax_Net_Interest_Rate numeric
+- [7] AfterTax_Net_Interest_Rate numeric
+- [8] NonIndustry_Income_Expenditure_Revenue numeric
+- [9] Continuous_Interest_Rate_After_Tax numeric
+- [10] Operating_Expense_Rate numeric
+- [11] R&D_Expense_Rate numeric
+- [12] Cash_Flow_Rate numeric
+- [13] InterestBearing_Debt_Interest_Rate numeric
+- [14] Tax_Rate_A  numeric
+- [15] Net_Value_Per_Share_B numeric
+- [16] Net_Value_Per_Share_A numeric
+- [17] Net_Value_Per_Share_C numeric
+- [18] Persistent_EPS_Last_4_Seasons numeric
+- [19] Cash_Flow_Per_Share numeric
+- [20] Revenue_Per_Share numeric
+- [21] Operating_Profit_Per_Share numeric
+- [22] Net_Profit_Before_Tax_Per_Share numeric
+- [23] Realized_Sales_Gross_Profit_Growth_Rate numeric
+- [24] Operating_Profit_Growth_Rate numeric
+- [25] AfterTax_Net_Profit_Growth_Rate numeric
+- [26] Regular_Net_Profit_Growth_Rate numeric
+- [27] Continuous_Net_Profit_Growth_Rate numeric
+- [28] Total_Asset_Growth_Rate numeric
+- [29] Net_Value_Growth_Rate numeric
+- [30] Total_Asset_Return_Growth_Rate numeric
+- [31] Cash_Reinvestment_Percent numeric
+- [32] Current_Ratio numeric
+- [33] Quick_Ratio numeric
+- [34] Interest_Expense_Ratio numeric
+- [35] Total_Debt_to_Net_Worth numeric
+- [36] Debt_Ratio_Percent numeric
+- [37] Net_Worth_to_Assets numeric
+- [38] LongTerm_Fund_Suitability_Ratio_A numeric
+- [39] Borrowing_Dependency numeric
+- [40] Contingent_Liabilities_to_Net_Worth numeric
+- [41] Operating_Profit_to_PaidIn_Capital numeric
+- [42] Net_Profit_Before_Tax_to_PaidIn_Capital numeric
+- [43] Inventory_Accounts_Receivable_to_Net_Value numeric
+- [44] Total_Asset_Turnover numeric
+- [45] Accounts_Receivable_Turnover numeric
+- [46] Average_Collection_Days numeric
+- [47] Inventory_Turnover_Rate numeric
+- [48] Fixed_Assets_Turnover_Frequency numeric
+- [49] Net_Worth_Turnover_Rate numeric
+- [50] Revenue_Per_Person numeric
+- [51] Operating_Profit_Per_Person numeric
+- [52] Allocation_Rate_Per_Person numeric
+- [53] Working_Capital_to_Total_Assets numeric
+- [54] Quick_Assets_to_Total_Assets numeric
+- [55] Current_Assets_to_Total_Assets numeric
+- [56] Cash_to_Total_Assets numeric
+- [57] Quick_Assets_to_Current_Liability numeric
+- [58] Cash_to_Current_Liability numeric
+- [59] Current_Liability_to_Assets numeric
+- [60] Operating_Funds_to_Liability numeric
+- [61] Inventory_to_Working_Capital numeric
+- [62] Inventory_to_Current_Liability numeric
+- [63] Current_Liabilities_to_Liability numeric
+- [64] Working_Capital_to_Equity numeric
+- [65] Current_Liabilities_to_Equity numeric
+- [66] LongTerm_Liability_to_Current_Assets numeric
+- [67] Retained_Earnings_to_Total_Assets numeric
+- [68] Total_Income_to_Total_Expense numeric
+- [69] Total_Expense_to_Assets numeric
+- [70] Current_Asset_Turnover_Rate numeric
+- [71] Quick_Asset_Turnover_Rate numeric
+- [72] Working_Capital_Turnover_Rate numeric
+- [73] Cash_Turnover_Rate numeric
+- [74] Cash_Flow_to_Sales numeric
+- [75] Fixed_Assets_to_Assets numeric
+- [76] Current_Liability_to_Liability numeric
+- [77] Current_Liability_to_Equity numeric
+- [78] Equity_to_LongTerm_Liability numeric
+- [79] Cash_Flow_to_Total_Assets numeric
+- [80] Cash_Flow_to_Liability numeric
+- [81] CFO_to_Assets numeric
+- [82] Cash_Flow_to_Equity numeric
+- [83] Current_Liability_to_Current_Assets numeric
+- [84] Net_Income_to_Total_Assets numeric
+- [85] Total_Assets_to_GNP_Price numeric
+- [86] NoCredit_Interval numeric
+- [87] Gross_Profit_to_Sales numeric
+- [88] Net_Income_to_Stockholders_Equity numeric
+- [89] Liability_to_Equity numeric
+- [90] DFL         numeric
+- [91] Interest_Coverage_Ratio numeric
+- [92] Equity_to_Liability numeric
+- [93] Liability_Assets_Flag binary (0/1)
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

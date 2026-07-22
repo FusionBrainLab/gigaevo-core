@@ -1,0 +1,55 @@
+TASK — TABULAR BINARY CLASSIFICATION (tabarena-credit-g)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] duration_months numeric
+- [1] credit_amount numeric
+- [2] installment_rate_percent numeric
+- [3] residence_since numeric
+- [4] age_years   numeric
+- [5] existing_credits_count numeric
+- [6] people_liable numeric
+- [7] checking_status categorical (integer code), 4 levels: 0=0 <= ... < 200 DM 1=<0 DM 2=>= 200 DM / salary assignments for >= 1 year 3=no checking account
+- [8] credit_history categorical (integer code), 5 levels: 0=all credits at this bank paid duly 1=critical account / other credits existing 2=delay in paying off in past 3=existing credits paid duly till now 4=no credits taken / all paid duly
+- [9] credit_purpose categorical (integer code), 10 levels: 0=business 1=car (new) 2=car (used) 3=domestic appliances 4=education 5=furniture/equipment 6=others 7=radio/television 8=repairs 9=retraining
+- [10] savings_status categorical (integer code), 5 levels: 0=100 <= ... < 500 DM 1=500 <= ... < 1000 DM 2=< 100 DM 3=>= 1000 DM 4=unknown / no savings
+- [11] employment_since categorical (integer code), 5 levels: 0=1 <= ... < 4 years 1=4 <= ... < 7 years 2=< 1 year 3=>= 7 years 4=unemployed
+- [12] personal_status_sex categorical (integer code), 4 levels: 0=female: divorced/separated/married 1=male: divorced/separated 2=male: married/widowed 3=male: single
+- [13] other_debtors categorical (integer code), 3 levels: 0=co-applicant 1=guarantor 2=none
+- [14] property    categorical (integer code), 4 levels: 0=building society savings / life insurance 1=car or other (not savings) 2=real estate 3=unknown / no property
+- [15] other_installment_plans categorical (integer code), 3 levels: 0=bank 1=none 2=stores
+- [16] housing     categorical (integer code), 3 levels: 0=for free 1=own 2=rent
+- [17] job         categorical (integer code), 4 levels: 0=management / self-employed / highly qualified 1=skilled employee / official 2=unemployed / unskilled non-resident 3=unskilled resident
+- [18] telephone   categorical (integer code), 2 levels: 0=none 1=yes, registered
+- [19] foreign_worker categorical (integer code), 2 levels: 0=no 1=yes
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

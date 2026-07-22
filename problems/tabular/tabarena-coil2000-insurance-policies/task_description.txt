@@ -1,0 +1,120 @@
+TASK — TABULAR BINARY CLASSIFICATION (tabarena-coil2000-insurance-policies)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] numberOfHouses numeric
+- [1] avgSizeHousehold numeric
+- [2] protestant  numeric
+- [3] otherReligion numeric
+- [4] noReligion  numeric
+- [5] married     numeric
+- [6] livingTogether numeric
+- [7] otherRelation numeric
+- [8] singles     numeric
+- [9] householdWithoutChildren numeric
+- [10] householdWithChildren numeric
+- [11] highLevelEducation numeric
+- [12] mediumLevelEducation numeric
+- [13] lowerLevelEducation numeric
+- [14] highStatus  numeric
+- [15] entrepreneur numeric
+- [16] farmer      numeric
+- [17] middleManagement numeric
+- [18] skilledLabourers numeric
+- [19] unskilledLabourers numeric
+- [20] socialClassA numeric
+- [21] socialClassB1 numeric
+- [22] socialClassB2 numeric
+- [23] socialClassC numeric
+- [24] socialClassD numeric
+- [25] rentedHouse numeric
+- [26] homeOwners  numeric
+- [27] oneCar      numeric
+- [28] twoCars     numeric
+- [29] noCar       numeric
+- [30] nationalHealthService numeric
+- [31] privateHealthInsurance numeric
+- [32] incomeLessThan30k numeric
+- [33] income30To45k numeric
+- [34] income45To75k numeric
+- [35] income75To122k numeric
+- [36] incomeAbove123k numeric
+- [37] averageIncome numeric
+- [38] purchasingPowerClass numeric
+- [39] contributionThirdPartyInsuranceFirms numeric
+- [40] contributionThirdPartyInsuranceAgriculture numeric
+- [41] contributionCarPolicies numeric
+- [42] contributionDeliveryVanPolicies numeric
+- [43] contributionMotorcycleScooterPolicies numeric
+- [44] contributionLorryPolicies numeric
+- [45] contributionTrailerPolicies numeric
+- [46] contributionTractorPolicies numeric
+- [47] contributionAgriculturalMachinesPolicies numeric
+- [48] contributionMopedPolicies numeric
+- [49] contributionLifeInsurances numeric
+- [50] contributionPrivateAccidentInsurancePolicies numeric
+- [51] contributionFamilyAccidentsInsurancePolicies numeric
+- [52] contributionDisabilityInsurancePolicies numeric
+- [53] contributionFirePolicies numeric
+- [54] contributionSurfboardPolicies numeric
+- [55] contributionBoatPolicies numeric
+- [56] contributionPropertyInsurancePolicies numeric
+- [57] contributionSocialSecurityInsurancePolicies numeric
+- [58] numberOfPrivateThirdPartyInsurance numeric
+- [59] numberOfThirdPartyInsuranceFirms numeric
+- [60] numberOfCarPolicies numeric
+- [61] numberOfDeliveryVanPolicies numeric
+- [62] numberOfMotorcycleScooterPolicies numeric
+- [63] numberOfLorryPolicies numeric
+- [64] numberOfTrailerPolicies numeric
+- [65] numberOfTractorPolicies numeric
+- [66] numberOfAgriculturalMachinesPolicies numeric
+- [67] numberOfMopedPolicies numeric
+- [68] numberOfLifeInsurances numeric
+- [69] numberOfDisabilityInsurancePolicies numeric
+- [70] numberOfFirePolicies numeric
+- [71] numberOfBoatPolicies numeric
+- [72] numberOfBicyclePolicies numeric
+- [73] numberOfPropertyInsurancePolicies numeric
+- [74] numberOfSocialSecurityInsurancePolicies numeric
+- [75] contributionBicyclePolicies binary (0/1)
+- [76] numberOfThirdPartyInsuranceAgriculture binary (0/1)
+- [77] numberOfPrivateAccidentInsurancePolicies binary (0/1)
+- [78] numberOfFamilyAccidentsInsurancePolicies binary (0/1)
+- [79] numberOfSurfboardPolicies binary (0/1)
+- [80] customerSubtype categorical (integer code), 39 levels: 0=Affluent senior apartments 1=Affluent young families 2=Career and childcare 3=Couples with teens 'Married with children' 4=Dinki's (double income no kids) 5=Etnically diverse 6=Family starters 7=Fresh masters in the city 8=High Income, expensive child 9=High status seniors 10=Large family farms 11=Large family, employed child 12=Large religous families 13=Low income catholics 14=Lower class large families 15=Middle class families 16=Mixed apartment dwellers 17=Mixed rurals 18=Mixed seniors 19=Mixed small town dwellers 20=Modern, complete families 21=Own home elderly 22=Porchless seniors: no front yard 23=Religious elderly singles 24=Residential elderly 25=Senior cosmopolitans 26=Seniors in apartments 27=Single youth 28=Stable family 29=Students in apartments 30=Suburban youth 31=Traditional families 32=Very Important Provincials 33=Village families 34=Young all american family 35=Young and rising 36=Young seniors in the city 37=Young urban have-nots 38=Young, low educated
+- [81] avgAge      categorical (integer code), 6 levels: 0=20-30 years 1=30-40 years 2=40-50 years 3=50-60 years 4=60-70 years 5=70-80 years
+- [82] customerMainType categorical (integer code), 10 levels: 0=Average Family 1=Career Loners 2=Conservative families 3=Cruising Seniors 4=Driven Growers 5=Family with grown ups 6=Farmers 7=Living well 8=Retired and Religeous 9=Successful hedonists
+- [83] romanCatholic categorical (integer code), 10 levels: 0=0% 1=1 - 10% 2=100% 3=11 - 23% 4=24 - 36% 5=37 - 49% 6=50 - 62% 7=63 - 75% 8=76 - 88% 9=89 - 99%
+- [84] contributionPrivateThirdPartyInsurance categorical (integer code), 4 levels: 0=f 0 1=f 1 - 49 2=f 100 - 199 3=f 50 - 99
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

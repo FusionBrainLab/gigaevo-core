@@ -1,0 +1,44 @@
+TASK — TABULAR REGRESSION (tabarena-food-delivery-time)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return preds  # 1D float array, shape (len(X_query),)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] Delivery_person_Age numeric
+- [1] Delivery_person_Ratings numeric
+- [2] Restaurant_latitude numeric
+- [3] Restaurant_longitude numeric
+- [4] Delivery_location_latitude numeric
+- [5] Delivery_location_longitude numeric
+- [6] Delivery_person_ID categorical (integer code), 1313 levels: 0=AGRRES010DEL02 1=AGRRES010DEL03 2=AGRRES01DEL01 3=AGRRES01DEL02 4=AGRRES01DEL03 5=AGRRES02DEL01 ... 1312=VADRES20DEL03
+- [7] Type_of_order categorical (integer code), 4 levels: 0=Buffet  1=Drinks  2=Meal  3=Snack
+- [8] Type_of_vehicle categorical (integer code), 4 levels: 0=bicycle  1=electric_scooter  2=motorcycle  3=scooter
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- for a skewed target, consider a log/power transform of y and clip predictions back to the observed target range
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

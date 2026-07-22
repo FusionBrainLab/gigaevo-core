@@ -1,0 +1,121 @@
+TASK — TABULAR BINARY CLASSIFICATION (tabarena-naticusdroid)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] android.permission.GET_ACCOUNTS categorical (integer code), 2 levels: 0=0 1=1
+- [1] com.sonyericsson.home.permission.BROADCAST_BADGE categorical (integer code), 2 levels: 0=0 1=1
+- [2] android.permission.READ_PROFILE categorical (integer code), 2 levels: 0=0 1=1
+- [3] android.permission.MANAGE_ACCOUNTS categorical (integer code), 2 levels: 0=0 1=1
+- [4] android.permission.WRITE_SYNC_SETTINGS categorical (integer code), 2 levels: 0=0 1=1
+- [5] android.permission.READ_EXTERNAL_STORAGE categorical (integer code), 2 levels: 0=0 1=1
+- [6] android.permission.RECEIVE_SMS categorical (integer code), 2 levels: 0=0 1=1
+- [7] com.android.launcher.permission.READ_SETTINGS categorical (integer code), 2 levels: 0=0 1=1
+- [8] android.permission.WRITE_SETTINGS categorical (integer code), 2 levels: 0=0 1=1
+- [9] com.google.android.providers.gsf.permission.READ_GSERVICES categorical (integer code), 2 levels: 0=0 1=1
+- [10] android.permission.DOWNLOAD_WITHOUT_NOTIFICATION categorical (integer code), 2 levels: 0=0 1=1
+- [11] android.permission.GET_TASKS categorical (integer code), 2 levels: 0=0 1=1
+- [12] android.permission.WRITE_EXTERNAL_STORAGE categorical (integer code), 2 levels: 0=0 1=1
+- [13] android.permission.RECORD_AUDIO categorical (integer code), 2 levels: 0=0 1=1
+- [14] com.huawei.android.launcher.permission.CHANGE_BADGE categorical (integer code), 2 levels: 0=0 1=1
+- [15] com.oppo.launcher.permission.READ_SETTINGS categorical (integer code), 2 levels: 0=0 1=1
+- [16] android.permission.CHANGE_NETWORK_STATE categorical (integer code), 2 levels: 0=0 1=1
+- [17] com.android.launcher.permission.INSTALL_SHORTCUT categorical (integer code), 2 levels: 0=0 1=1
+- [18] android.permission.android.permission.READ_PHONE_STATE categorical (integer code), 2 levels: 0=0 1=1
+- [19] android.permission.CALL_PHONE categorical (integer code), 2 levels: 0=0 1=1
+- [20] android.permission.WRITE_CONTACTS categorical (integer code), 2 levels: 0=0 1=1
+- [21] android.permission.READ_PHONE_STATE categorical (integer code), 2 levels: 0=0 1=1
+- [22] samsung.providers.context.WRITE_USE_APP_FEATURE_SURVEY categorical (integer code), 2 levels: 0=0 1=1
+- [23] android.permission.MODIFY_AUDIO_SETTINGS categorical (integer code), 2 levels: 0=0 1=1
+- [24] android.permission.ACCESS_LOCATION_EXTRA_COMMANDS categorical (integer code), 2 levels: 0=0 1=1
+- [25] android.permission.INTERNET categorical (integer code), 2 levels: 0=0 1=1
+- [26] android.permission.MOUNT_UNMOUNT_FILESYSTEMS categorical (integer code), 2 levels: 0=0 1=1
+- [27] com.majeur.launcher.permission.UPDATE_BADGE categorical (integer code), 2 levels: 0=0 1=1
+- [28] android.permission.AUTHENTICATE_ACCOUNTS categorical (integer code), 2 levels: 0=0 1=1
+- [29] com.htc.launcher.permission.READ_SETTINGS categorical (integer code), 2 levels: 0=0 1=1
+- [30] android.permission.ACCESS_WIFI_STATE categorical (integer code), 2 levels: 0=0 1=1
+- [31] android.permission.FLASHLIGHT categorical (integer code), 2 levels: 0=0 1=1
+- [32] android.permission.READ_APP_BADGE categorical (integer code), 2 levels: 0=0 1=1
+- [33] android.permission.USE_CREDENTIALS categorical (integer code), 2 levels: 0=0 1=1
+- [34] android.permission.CHANGE_CONFIGURATION categorical (integer code), 2 levels: 0=0 1=1
+- [35] android.permission.READ_SYNC_SETTINGS categorical (integer code), 2 levels: 0=0 1=1
+- [36] android.permission.BROADCAST_STICKY categorical (integer code), 2 levels: 0=0 1=1
+- [37] com.anddoes.launcher.permission.UPDATE_COUNT categorical (integer code), 2 levels: 0=0 1=1
+- [38] com.android.alarm.permission.SET_ALARM categorical (integer code), 2 levels: 0=0 1=1
+- [39] com.google.android.c2dm.permission.RECEIVE categorical (integer code), 2 levels: 0=0 1=1
+- [40] android.permission.KILL_BACKGROUND_PROCESSES categorical (integer code), 2 levels: 0=0 1=1
+- [41] com.sonymobile.home.permission.PROVIDER_INSERT_BADGE categorical (integer code), 2 levels: 0=0 1=1
+- [42] com.sec.android.provider.badge.permission.READ categorical (integer code), 2 levels: 0=0 1=1
+- [43] android.permission.WRITE_CALENDAR categorical (integer code), 2 levels: 0=0 1=1
+- [44] android.permission.SEND_SMS categorical (integer code), 2 levels: 0=0 1=1
+- [45] com.huawei.android.launcher.permission.WRITE_SETTINGS categorical (integer code), 2 levels: 0=0 1=1
+- [46] android.permission.REQUEST_INSTALL_PACKAGES categorical (integer code), 2 levels: 0=0 1=1
+- [47] android.permission.SET_WALLPAPER_HINTS categorical (integer code), 2 levels: 0=0 1=1
+- [48] android.permission.SET_WALLPAPER categorical (integer code), 2 levels: 0=0 1=1
+- [49] com.oppo.launcher.permission.WRITE_SETTINGS categorical (integer code), 2 levels: 0=0 1=1
+- [50] android.permission.RESTART_PACKAGES categorical (integer code), 2 levels: 0=0 1=1
+- [51] me.everything.badger.permission.BADGE_COUNT_WRITE categorical (integer code), 2 levels: 0=0 1=1
+- [52] android.permission.ACCESS_MOCK_LOCATION categorical (integer code), 2 levels: 0=0 1=1
+- [53] android.permission.ACCESS_COARSE_LOCATION categorical (integer code), 2 levels: 0=0 1=1
+- [54] android.permission.READ_LOGS categorical (integer code), 2 levels: 0=0 1=1
+- [55] com.google.android.gms.permission.ACTIVITY_RECOGNITION categorical (integer code), 2 levels: 0=0 1=1
+- [56] com.amazon.device.messaging.permission.RECEIVE categorical (integer code), 2 levels: 0=0 1=1
+- [57] android.permission.SYSTEM_ALERT_WINDOW categorical (integer code), 2 levels: 0=0 1=1
+- [58] android.permission.DISABLE_KEYGUARD categorical (integer code), 2 levels: 0=0 1=1
+- [59] android.permission.USE_FINGERPRINT categorical (integer code), 2 levels: 0=0 1=1
+- [60] me.everything.badger.permission.BADGE_COUNT_READ categorical (integer code), 2 levels: 0=0 1=1
+- [61] android.permission.CHANGE_WIFI_STATE categorical (integer code), 2 levels: 0=0 1=1
+- [62] android.permission.READ_CONTACTS categorical (integer code), 2 levels: 0=0 1=1
+- [63] com.android.vending.BILLING categorical (integer code), 2 levels: 0=0 1=1
+- [64] android.permission.READ_CALENDAR categorical (integer code), 2 levels: 0=0 1=1
+- [65] android.permission.RECEIVE_BOOT_COMPLETED categorical (integer code), 2 levels: 0=0 1=1
+- [66] android.permission.WAKE_LOCK categorical (integer code), 2 levels: 0=0 1=1
+- [67] android.permission.ACCESS_FINE_LOCATION categorical (integer code), 2 levels: 0=0 1=1
+- [68] android.permission.BLUETOOTH categorical (integer code), 2 levels: 0=0 1=1
+- [69] android.permission.CAMERA categorical (integer code), 2 levels: 0=0 1=1
+- [70] com.android.vending.CHECK_LICENSE categorical (integer code), 2 levels: 0=0 1=1
+- [71] android.permission.FOREGROUND_SERVICE categorical (integer code), 2 levels: 0=0 1=1
+- [72] android.permission.BLUETOOTH_ADMIN categorical (integer code), 2 levels: 0=0 1=1
+- [73] android.permission.VIBRATE categorical (integer code), 2 levels: 0=0 1=1
+- [74] android.permission.NFC categorical (integer code), 2 levels: 0=0 1=1
+- [75] android.permission.RECEIVE_USER_PRESENT categorical (integer code), 2 levels: 0=0 1=1
+- [76] android.permission.CLEAR_APP_CACHE categorical (integer code), 2 levels: 0=0 1=1
+- [77] com.android.launcher.permission.UNINSTALL_SHORTCUT categorical (integer code), 2 levels: 0=0 1=1
+- [78] com.sec.android.iap.permission.BILLING categorical (integer code), 2 levels: 0=0 1=1
+- [79] com.htc.launcher.permission.UPDATE_SHORTCUT categorical (integer code), 2 levels: 0=0 1=1
+- [80] com.sec.android.provider.badge.permission.WRITE categorical (integer code), 2 levels: 0=0 1=1
+- [81] android.permission.ACCESS_NETWORK_STATE categorical (integer code), 2 levels: 0=0 1=1
+- [82] google.finsky.permission.BIND_GET_INSTALL_REFERRER_SERVICE categorical (integer code), 2 levels: 0=0 1=1
+- [83] com.huawei.android.launcher.permission.READ_SETTINGS categorical (integer code), 2 levels: 0=0 1=1
+- [84] android.permission.READ_SMS categorical (integer code), 2 levels: 0=0 1=1
+- [85] android.permission.PROCESS_INCOMING_CALLS categorical (integer code), 2 levels: 0=0 1=1
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

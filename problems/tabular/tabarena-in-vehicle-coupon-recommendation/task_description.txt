@@ -1,0 +1,59 @@
+TASK — TABULAR BINARY CLASSIFICATION (tabarena-in-vehicle-coupon-recommendation)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] temperature numeric
+- [1] time        numeric
+- [2] destination categorical (integer code), 3 levels: 0=Home 1=No Urgent Place 2=Work
+- [3] passenger   categorical (integer code), 4 levels: 0=Alone 1=Friend(s) 2=Kid(s) 3=Partner
+- [4] weather     categorical (integer code), 3 levels: 0=Rainy 1=Snowy 2=Sunny
+- [5] coupon      categorical (integer code), 5 levels: 0=Bar 1=Carry out & Take away 2=Coffee House 3=Restaurant(20-50) 4=Restaurant(<20)
+- [6] expiration  categorical (integer code), 2 levels: 0=1d 1=2h
+- [7] gender      categorical (integer code), 2 levels: 0=Female 1=Male
+- [8] age         categorical (integer code), 8 levels: 0=21 1=26 2=31 3=36 4=41 5=46 6=50plus 7=below21
+- [9] maritalStatus categorical (integer code), 5 levels: 0=Divorced 1=Married partner 2=Single 3=Unmarried partner 4=Widowed
+- [10] has_children categorical (integer code), 2 levels: 0=0 1=1
+- [11] education   categorical (integer code), 6 levels: 0=Associates degree 1=Bachelors degree 2=Graduate degree (Masters or Doctorate) 3=High School Graduate 4=Some High School 5=Some college - no degree
+- [12] occupation  categorical (integer code), 25 levels: 0=Architecture & Engineering 1=Arts Design Entertainment Sports & Media 2=Building & Grounds Cleaning & Maintenance 3=Business & Financial 4=Community & Social Services 5=Computer & Mathematical 6=Construction & Extraction 7=Education&Training&Library 8=Farming Fishing & Forestry 9=Food Preparation & Serving Related 10=Healthcare Practitioners & Technical 11=Healthcare Support 12=Installation Maintenance & Repair 13=Legal 14=Life Physical Social Science 15=Management 16=Office & Administrative Support 17=Personal Care & Service 18=Production Occupations 19=Protective Service 20=Retired 21=Sales & Related 22=Student 23=Transportation & Material Moving 24=Unemployed
+- [13] income      categorical (integer code), 9 levels: 0=$100000 or More 1=$12500 - $24999 2=$25000 - $37499 3=$37500 - $49999 4=$50000 - $62499 5=$62500 - $74999 6=$75000 - $87499 7=$87500 - $99999 8=Less than $12500
+- [14] car         categorical (integer code), 6 levels: 0=Car that is too old to install Onstar :D 1=Mazda5 2=Scooter and motorcycle 3=crossover 4=do not drive 5=nan
+- [15] Bar         categorical (integer code), 6 levels: 0=1~3 1=4~8 2=gt8 3=less1 4=nan 5=never
+- [16] CoffeeHouse categorical (integer code), 6 levels: 0=1~3 1=4~8 2=gt8 3=less1 4=nan 5=never
+- [17] CarryAway   categorical (integer code), 6 levels: 0=1~3 1=4~8 2=gt8 3=less1 4=nan 5=never
+- [18] RestaurantLessThan20 categorical (integer code), 6 levels: 0=1~3 1=4~8 2=gt8 3=less1 4=nan 5=never
+- [19] Restaurant20To50 categorical (integer code), 6 levels: 0=1~3 1=4~8 2=gt8 3=less1 4=nan 5=never
+- [20] toCoupon_GEQ15min categorical (integer code), 2 levels: 0=0 1=1
+- [21] toCoupon_GEQ25min categorical (integer code), 2 levels: 0=0 1=1
+- [22] direction_same categorical (integer code), 2 levels: 0=0 1=1
+- [23] direction_opp categorical (integer code), 2 levels: 0=0 1=1
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

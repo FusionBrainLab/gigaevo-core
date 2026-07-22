@@ -1,0 +1,58 @@
+TASK — TABULAR BINARY CLASSIFICATION (tabarena-credit-card-clients-default)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] LIMIT_BAL   numeric
+- [1] AGE         numeric
+- [2] PAY_0       numeric
+- [3] PAY_2       numeric
+- [4] PAY_3       numeric
+- [5] PAY_4       numeric
+- [6] PAY_5       numeric
+- [7] PAY_6       numeric
+- [8] BILL_AMT1   numeric
+- [9] BILL_AMT2   numeric
+- [10] BILL_AMT3   numeric
+- [11] BILL_AMT4   numeric
+- [12] BILL_AMT5   numeric
+- [13] BILL_AMT6   numeric
+- [14] PAY_AMT1    numeric
+- [15] PAY_AMT2    numeric
+- [16] PAY_AMT3    numeric
+- [17] PAY_AMT4    numeric
+- [18] PAY_AMT5    numeric
+- [19] PAY_AMT6    numeric
+- [20] SEX         categorical (integer code), 2 levels: 0=1 1=2
+- [21] EDUCATION   categorical (integer code), 7 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6
+- [22] MARRIAGE    categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs
