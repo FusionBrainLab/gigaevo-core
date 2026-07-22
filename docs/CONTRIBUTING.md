@@ -9,7 +9,7 @@ pip install -e ".[all,dev,test]"
 ```
 
 This pulls in every user-facing extra (chains, optimization, plotting,
-tracking, local-llm, memory-platform) plus linters, type-checkers,
+tracking, and TabM evaluation) plus linters, type-checkers,
 pytest, and the dag_builder dev API. See [README — Install](../README.md#1-install)
 for the lighter install levels.
 

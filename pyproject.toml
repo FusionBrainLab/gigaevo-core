@@ -108,11 +108,11 @@ tracking = [
     "wandb",
 ]
 
-# Heavy GPU / local-LLM stack — required only by problems/prompts/sudoku
-# local_runtime.
-local-llm = [
-    "torch",
-    "vllm",
+# TabM-backed FeatureGraph evaluation. This path does not install vllm.
+tabm-eval = [
+    "torch>=2.4,<3",
+    "tabm==0.0.3",
+    "rtdl-num-embeddings>=0.0.12,<0.1",
 ]
 
 # GAM memory platform API client — PARKED by the memory rebuild. Its only
@@ -146,7 +146,7 @@ test = [
 
 # Convenience meta-extra — everything user-facing.
 all = [
-    "gigaevo[chains,optimization,plotting,tracking,local-llm]",
+    "gigaevo[chains,optimization,plotting,tracking,tabm-eval]",
 ]
 
 [project.scripts]
@@ -250,9 +250,8 @@ module = [
     # [tracking] extra
     "wandb.*",
     "tensorboardX.*",
-    # [local-llm] extra
+    # [tabm-eval] extra
     "torch.*",
-    "vllm.*",
     # [dev] extra
     "uvicorn.*",
 ]

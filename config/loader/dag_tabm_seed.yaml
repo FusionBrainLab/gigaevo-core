@@ -1,0 +1,6 @@
+# @package _global_
+
+program_loader:
+  _target_: problems.dag_tabm.seed_loader.DagTabMSeedLoader
+  dataset: ${problem.dataset}
+  problem_dir: ${problem.dir}

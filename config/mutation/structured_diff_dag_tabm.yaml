@@ -1,0 +1,21 @@
+# @package _global_
+# The shared FeatureGraph mutation language, evaluated by TabM.
+
+problem:
+  dataset: california
+
+problem_context:
+  _target_: problems.dag_tabm.problem_context.DagTabMProblemContext
+  problem_dir: ${problem.dir}
+  dataset: ${problem.dataset}
+
+mutation_operator:
+  _target_: gigaevo.evolution.mutation.structured_diff.StructuredDiffMutationOperator
+  llm_wrapper: ${ref:llm}
+  allowed_changes:
+    _target_: problems.dag_tabm.allowed_changes.AllowedDagTabChanges
+    min_nodes: 1
+    max_nodes: 12
+  problem_context: ${problem_context}
+  prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}

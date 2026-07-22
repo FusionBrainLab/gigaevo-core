@@ -47,7 +47,7 @@ on firewalled/slow networks. Pick the install level that matches your use:
 |---|---|
 | **Minimal** — engine + numpy exemplar problems + LLM mutation + core CLI (`status`, `top`, `trajectory`, `logs`, `flush`, `checkpoint`, `inspect`, `launch`, `watchdog`, `export`) | `pip install -e .` |
 | **Common** — also runs chain/NLP problems (HoVer, HotpotQA, IFBench, gsm8k, …) + `gigaevo plot` / `gigaevo events` / `gigaevo profiler` | `pip install -e ".[chains,plotting]"` |
-| **Full** — everything user-facing (chains, optimization, plotting, tracking, local-LLM runtime, memory platform) | `pip install -e ".[all]"` |
+| **Full** — everything user-facing (chains, optimization, plotting, tracking, and TabM evaluation) | `pip install -e ".[all]"` |
 | **Developer** — full + linters, type-checkers, pytest, dag_builder dev API | `pip install -e ".[all,dev,test]"` |
 
 À la carte mapping of features to extras:
@@ -59,7 +59,7 @@ on firewalled/slow networks. Pick the install level that matches your use:
 | Optuna / CMA optimization stages | `[optimization]` |
 | Alphaevolve / hexagon_improver / santa2025 problems (JAX, sympy, shapely) | `[optimization]` |
 | W&B / TensorBoard tracker backends | `[tracking]` |
-| sudoku local-runtime solver (torch + vllm) | `[local-llm]` |
+| TabM FeatureGraph evaluator | `[tabm-eval]` |
 | GAM memory **platform** backend (`use_api=True`) — local backend needs nothing | `[memory-platform]` |
 | `tools/dag_builder` web API | `[dev]` (uvicorn) |
 
