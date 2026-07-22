@@ -57,13 +57,11 @@ def test_validator_reuses_shared_folds_std_bd_and_test_protocol(monkeypatch):
 
     metrics, artifact = validator.validate(_payload())
 
-    splits = list(
-        KFold(n_splits=3, shuffle=True, random_state=0).split(dataset.X_train)
-    )
+    X_dev = np.concatenate([dataset.X_train, dataset.X_val])
+    y_dev = np.concatenate([dataset.y_train, dataset.y_val])
+    splits = list(KFold(n_splits=3, shuffle=True, random_state=0).split(X_dev))
     scores = [
-        regression_fold_metrics(
-            dataset.y_train[query_idx], dataset.X_train[query_idx, 0]
-        )["score"]
+        regression_fold_metrics(y_dev[query_idx], X_dev[query_idx, 0])["score"]
         for _, query_idx in splits
     ]
     expected_std = float(np.std(scores, ddof=1))

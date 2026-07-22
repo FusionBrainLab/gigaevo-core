@@ -98,13 +98,45 @@ class TabularProblem:
     def _dataset(self) -> tabular_data.Dataset:
         return tabular_data.load_dataset(self.name)
 
-    def _splits(self, n: int) -> list[tuple[np.ndarray, np.ndarray]]:
+    def _splits(self, n: int) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        """Return rotating train, early-stop validation, and query indices."""
+
         idx = np.arange(n)
         if n <= _env_int(CV_MAX_ENV, _DEFAULT_CV_MAX):
             kf = KFold(n_splits=_k_folds(), shuffle=True, random_state=_SEED)
-            return list(kf.split(idx))
-        kf = KFold(n_splits=_HOLDOUT_SPLITS, shuffle=True, random_state=_SEED)
-        return [next(iter(kf.split(idx)))]
+            query_folds = [query_idx for _, query_idx in kf.split(idx)]
+            query_positions = range(len(query_folds))
+        else:
+            kf = KFold(n_splits=_HOLDOUT_SPLITS, shuffle=True, random_state=_SEED)
+            query_folds = [query_idx for _, query_idx in kf.split(idx)]
+            query_positions = range(1)
+
+        splits: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+        for query_position in query_positions:
+            val_position = (query_position + 1) % len(query_folds)
+            if len(query_folds) == 2:
+                fit_pool = query_folds[val_position]
+                inner = KFold(n_splits=2, shuffle=True, random_state=_SEED)
+                train_local, val_local = next(inner.split(fit_pool))
+                splits.append(
+                    (
+                        fit_pool[train_local],
+                        fit_pool[val_local],
+                        query_folds[query_position],
+                    )
+                )
+                continue
+            train_idx = np.concatenate(
+                [
+                    fold
+                    for position, fold in enumerate(query_folds)
+                    if position not in {query_position, val_position}
+                ]
+            )
+            splits.append(
+                (train_idx, query_folds[val_position], query_folds[query_position])
+            )
+        return splits
 
     def _fold_metrics(self, ds, y_true, pred) -> dict[str, float]:
         if ds.task_type == tabular_data.REGRESSION:
@@ -136,20 +168,24 @@ class TabularProblem:
                 "ood_delta_slope": tabular_bd.BD_OOD_MAX,
             }
 
-    def validate(self, model_factory) -> dict[str, float]:
+    def validate(
+        self, model_factory
+    ) -> tuple[dict[str, float], dict[str, object] | None]:
         ds = self._dataset()
-        splits = self._splits(ds.X_train.shape[0])
+        X_dev = np.concatenate([ds.X_train, ds.X_val])
+        y_dev = np.concatenate([ds.y_train, ds.y_val])
+        splits = self._splits(X_dev.shape[0])
         folds: list[dict[str, float]] = []
-        for fit_idx, query_idx in splits:
+        for train_idx, val_idx, query_idx in splits:
             instance = tabular_metrics.instantiate(model_factory)
             pred = instance.fit_predict(
-                ds.X_train[fit_idx],
-                ds.y_train[fit_idx],
-                ds.X_val.copy(),
-                ds.y_val.copy(),
-                ds.X_train[query_idx],
+                X_dev[train_idx],
+                y_dev[train_idx],
+                X_dev[val_idx],
+                y_dev[val_idx],
+                X_dev[query_idx],
             )
-            folds.append(self._fold_metrics(ds, ds.y_train[query_idx], pred))
+            folds.append(self._fold_metrics(ds, y_dev[query_idx], pred))
 
         scores = [m["score"] for m in folds]
         cv_score_std = float(np.std(scores, ddof=1)) if len(folds) > 1 else 0.0
@@ -182,10 +218,13 @@ class TabularProblem:
         if ds.task_type == tabular_data.REGRESSION:
             m = tabular_metrics.regression_fold_metrics(ds.y_test, pred)
             return {"test_rmse": m["rmse"], "test_r2": float(r2_score(ds.y_test, pred))}
-        labels = tabular_metrics.to_labels(pred, ds.n_classes)
+        if ds.n_classes is None:
+            raise ValueError("classification dataset must declare n_classes")
+        n_classes = ds.n_classes
+        labels = tabular_metrics.to_labels(pred, n_classes)
         acc = float(np.mean(labels == ds.y_test.astype(int)))
         if ds.task_type == tabular_data.BINCLASS:
-            proba = tabular_metrics.to_proba(pred, ds.n_classes)
+            proba = tabular_metrics.to_proba(pred, n_classes)
             try:
                 auc = float(roc_auc_score(ds.y_test, proba[:, 1]))
             except ValueError:
@@ -194,7 +233,15 @@ class TabularProblem:
         macro = float(
             f1_score(ds.y_test.astype(int), labels, average="macro", zero_division=0)
         )
-        return {"test_accuracy": acc, "test_macro_f1": macro}
+        proba = tabular_metrics.to_proba(pred, n_classes)
+        fold = tabular_metrics.classification_fold_metrics(
+            ds.y_test, proba, n_classes, ds.task_type
+        )
+        return {
+            "test_accuracy": acc,
+            "test_macro_f1": macro,
+            "test_log_loss": fold["log_loss"],
+        }
 
 
 def build(name: str) -> TabularProblem:

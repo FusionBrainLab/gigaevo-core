@@ -26,6 +26,26 @@ uvx tabred download all --output-path /some/dir/tabred-native
 python problems/tabular/_common/import_tabred.py /some/dir/tabred-native /some/dir/data
 ```
 
+The TabArena leaderboard datasets are the public OpenML suite
+`tabarena-v0.1`. Download its official tasks and splits, then import the
+TabArena-Lite r0f0 view: repeat 0 fold 2 is train, fold 1 is validation, and
+fold 0 is the untouched test set. Train plus validation therefore exactly
+matches the official r0f0 training set.
+
+Evolution validation merges train and validation, then rotates the configured
+deterministic folds through fit, early-stopping validation, and scored-query
+roles.
+
+```bash
+uvx --from openml python problems/tabular/_common/import_tabarena.py /some/dir/data \
+  --openml-cache /some/dir/tabarena-openml
+```
+
+Imported IDs are prefixed `tabarena-`. Full TabArena scores aggregate 9–30
+outer splits per dataset; these single-view datasets must be reported as
+`TabArena-Lite-r0f0`. Comparable final metrics are RMSE (regression), ROC-AUC
+(binary), and log-loss (multiclass).
+
 ## Datasets
 
 | problem.name          | task        | features (num/cat/bin) | classes | eval   |
