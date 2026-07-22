@@ -1,0 +1,1 @@
+../../_common/score_test.py

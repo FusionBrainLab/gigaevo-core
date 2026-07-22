@@ -24,6 +24,8 @@ temporal splits into the same data root with:
 ```bash
 uvx tabred download all --output-path /some/dir/tabred-native
 python problems/tabular/_common/import_tabred.py /some/dir/tabred-native /some/dir/data
+GIGAEVO_TABULAR_DATA=/some/dir/data \
+  python problems/tabular/_common/gen_task_descriptions.py --collection tabred
 ```
 
 The TabArena leaderboard datasets are the public OpenML suite
@@ -40,13 +42,14 @@ roles.
 uvx --from openml python problems/tabular/_common/import_tabarena.py /some/dir/data \
   --openml-cache /some/dir/tabarena-openml
 GIGAEVO_TABULAR_DATA=/some/dir/data \
-  python problems/tabular/_common/gen_task_descriptions.py --prefix tabarena-
+  python problems/tabular/_common/gen_task_descriptions.py --collection tabarena
 ```
 
-Imported IDs are prefixed `tabarena-`. Full TabArena scores aggregate 9–30
-outer splits per dataset; these single-view datasets must be reported as
-`TabArena-Lite-r0f0`. Comparable final metrics are RMSE (regression), ROC-AUC
-(binary), and log-loss (multiclass).
+Imported data IDs are prefixed `tabarena-`; grouped problem paths omit that
+redundant prefix. Full TabArena scores aggregate 9–30 outer splits per dataset;
+these single-view datasets must be reported as `TabArena-Lite-r0f0`. Comparable
+final metrics are RMSE (regression), ROC-AUC (binary), and log-loss
+(multiclass).
 
 ## Datasets
 
@@ -99,7 +102,8 @@ python run.py problem.name=tabular/california algorithm=tabular/2d_local_ood
 ```
 
 For example, replace the problem with
-`problem.name=tabular/tabarena-airfoil-self-noise` to run its r0f0 view.
+`problem.name=tabular/tabarena/airfoil-self-noise` to run its r0f0 view, or
+`problem.name=tabular/tabred/weather` for a TabReD task.
 
 End-of-evolution test scoring (never a search signal):
 
@@ -117,6 +121,8 @@ GIGAEVO_TABULAR_DATA=/some/dir/data \
 python problems/tabular/_common/gen_task_descriptions.py
 ```
 
-Use `--prefix tabarena-` for all imported TabArena datasets.
+Use `--collection tabm`, `--collection tabred`, or `--collection tabarena` for
+the grouped collections. The original ten flat problem paths remain available
+for backward compatibility.
 
 (`california`'s numeric feature names are hand-added on top of the generated block.)

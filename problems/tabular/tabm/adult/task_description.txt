@@ -1,0 +1,51 @@
+TASK — TABULAR BINARY CLASSIFICATION (adult)
+
+DATASET — predict whether a person's annual income exceeds $50K from 1994 US census attributes
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0] age         age in years (17-90)
+- [1] fnlwgt      census final sampling weight, people the row represents (~1.9e4-1.5e6)
+- [2] education_num education level as ordinal integer 1 (Preschool) to 16 (Doctorate)
+- [3] capital_gain capital gains income, USD (0-99999)
+- [4] capital_loss capital losses, USD (0-4356)
+- [5] hours_per_week hours worked per week (1-99)
+- [6] sex         sex; 1=Female (~33%), 0=Male
+- [7] workclass   employer / employment type — categorical (integer code), 9 levels: 0=Federal-gov 1=Local-gov 2=Never-worked 3=Private 4=Self-emp-inc 5=Self-emp-not-inc 6=State-gov 7=Without-pay 8=nan
+- [8] education   highest education attained — categorical (integer code), 16 levels: 0=10th 1=11th 2=12th 3=1st-4th 4=5th-6th 5=7th-8th 6=9th 7=Assoc-acdm 8=Assoc-voc 9=Bachelors 10=Doctorate 11=HS-grad 12=Masters 13=Preschool 14=Prof-school 15=Some-college
+- [9] marital_status marital status — categorical (integer code), 7 levels: 0=Divorced 1=Married-AF-spouse 2=Married-civ-spouse 3=Married-spouse-absent 4=Never-married 5=Separated 6=Widowed
+- [10] occupation  occupation type — categorical (integer code), 15 levels: 0=Adm-clerical 1=Armed-Forces 2=Craft-repair 3=Exec-managerial 4=Farming-fishing 5=Handlers-cleaners 6=Machine-op-inspct 7=Other-service 8=Priv-house-serv 9=Prof-specialty 10=Protective-serv 11=Sales 12=Tech-support 13=Transport-moving 14=nan
+- [11] relationship role in household / family — categorical (integer code), 6 levels: 0=Husband 1=Not-in-family 2=Other-relative 3=Own-child 4=Unmarried 5=Wife
+- [12] race        race — categorical (integer code), 5 levels: 0=Amer-Indian-Eskimo 1=Asian-Pac-Islander 2=Black 3=Other 4=White
+- [13] native_country country of origin — categorical (integer code), 42 levels: 0=Cambodia 1=Canada 2=China 3=Columbia 4=Cuba 5=Dominican-Republic ... 41=nan
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

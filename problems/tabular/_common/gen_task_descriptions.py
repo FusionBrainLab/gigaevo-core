@@ -2,7 +2,9 @@
 
 Run once (with GIGAEVO_TABULAR_DATA set) after the dataset dirs exist:
     python problems/tabular/_common/gen_task_descriptions.py
-    python problems/tabular/_common/gen_task_descriptions.py --prefix tabarena-
+    python problems/tabular/_common/gen_task_descriptions.py --collection tabm
+    python problems/tabular/_common/gen_task_descriptions.py --collection tabarena
+    python problems/tabular/_common/gen_task_descriptions.py --collection tabred
 The generated column block enumerates categorical value vocabularies so a
 program can decode/one-hot the integer-coded categorical columns.
 """
@@ -26,6 +28,7 @@ import tabular_data  # noqa: E402
 _TABULAR_ROOT = _HERE.parent
 _SEMANTICS_PATH = _HERE / "column_semantics.yaml"
 _DATA_ENV = "GIGAEVO_TABULAR_DATA"
+_COLLECTIONS = ("tabm", "tabred", "tabarena")
 
 _DATASETS = {
     "regression": ["california", "house", "diamond", "black-friday", "microsoft"],
@@ -107,20 +110,33 @@ def _dataset_info(name: str) -> dict:
     return json.loads((_data_root() / name / "info.json").read_text())
 
 
-def _discover(prefix: str) -> dict[str, list[str]]:
+def _collection_for(name: str, info: dict) -> str | None:
+    identifier = str(info.get("id", ""))
+    source = str((info.get("source") or {}).get("benchmark", "")).lower()
+    if name.startswith("tabarena-") or source.startswith("tabarena"):
+        return "tabarena"
+    if identifier.endswith("--tabred-default") or source.startswith("tabred"):
+        return "tabred"
+    return "tabm"
+
+
+def _discover(collection: str) -> dict[str, list[str]]:
     datasets: dict[str, list[str]] = {task_type: [] for task_type in _SKELETON}
     for folder in sorted(_data_root().iterdir()):
-        if not folder.is_dir() or not folder.name.startswith(prefix):
+        if not folder.is_dir():
             continue
         info_path = folder / "info.json"
         if not info_path.is_file():
             continue
-        task_type = json.loads(info_path.read_text()).get("task_type")
+        info = json.loads(info_path.read_text())
+        if _collection_for(folder.name, info) != collection:
+            continue
+        task_type = info.get("task_type")
         if task_type not in datasets:
             raise ValueError(f"{folder.name} has unsupported task_type={task_type!r}")
         datasets[task_type].append(folder.name)
     if not any(datasets.values()):
-        raise ValueError(f"no datasets with prefix {prefix!r} found in {_data_root()}")
+        raise ValueError(f"no {collection!r} datasets found in {_data_root()}")
     return datasets
 
 
@@ -164,42 +180,47 @@ def render(name: str, task_type: str) -> str:
 
 def _ensure_link(path: Path, target: str, *, directory: bool = False) -> None:
     if path.is_symlink():
-        if os.readlink(path) != target:
-            raise ValueError(
-                f"{path} points to {os.readlink(path)!r}, expected {target!r}"
-            )
-        return
+        if os.readlink(path) == target:
+            return
+        path.unlink()
     if path.exists():
         raise ValueError(f"refusing to replace existing {path}")
     path.symlink_to(target, target_is_directory=directory)
 
 
-def materialize(name: str, task_type: str) -> Path:
-    out = _TABULAR_ROOT / name
+def materialize(name: str, task_type: str, *, collection: str | None = None) -> Path:
+    visible_name = name.removeprefix("tabarena-") if collection == "tabarena" else name
+    out = (
+        _TABULAR_ROOT / collection / visible_name
+        if collection
+        else _TABULAR_ROOT / name
+    )
     out.mkdir(parents=True, exist_ok=True)
-    _ensure_link(out / "validate.py", "../_common/validate.py")
-    _ensure_link(out / "score_test.py", "../_common/score_test.py")
-    _ensure_link(out / "metrics.yaml", f"../_common/metrics_{task_type}.yaml")
+    relative_common = os.path.relpath(_HERE, out)
+    _ensure_link(out / "validate.py", f"{relative_common}/validate.py")
+    _ensure_link(out / "score_test.py", f"{relative_common}/score_test.py")
+    _ensure_link(out / "metrics.yaml", f"{relative_common}/metrics_{task_type}.yaml")
     _ensure_link(
         out / "initial_programs",
-        f"../_common/seeds/{task_type}",
+        f"{relative_common}/seeds/{task_type}",
         directory=True,
     )
+    if collection:
+        (out / "dataset_id.txt").write_text(f"{name}\n")
     (out / "task_description.txt").write_text(render(name, task_type))
+    tabular_data._CACHE.pop(name, None)
     return out
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--prefix", help="discover datasets with this prefix from the data root"
-    )
+    parser.add_argument("--collection", choices=_COLLECTIONS)
     args = parser.parse_args()
 
-    datasets = _discover(args.prefix) if args.prefix else _DATASETS
+    datasets = _discover(args.collection) if args.collection else _DATASETS
     for task_type, names in datasets.items():
         for name in names:
-            print(f"wrote {materialize(name, task_type)}")
+            print(f"wrote {materialize(name, task_type, collection=args.collection)}")
     return 0
 
 

@@ -1,0 +1,119 @@
+TASK — TABULAR BINARY CLASSIFICATION (homecredit-default)
+
+CONTRACT
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0-611]    numeric
+- [612-613]  binary (0/1)
+- [614]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [615]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [616]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [617]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [618]       categorical (integer code), 11 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6 7=7 8=8 9=9 10=10
+- [619]       categorical (integer code), 8 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6 7=7
+- [620]       categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [621]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [622]       categorical (integer code), 7 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6
+- [623]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [624]       categorical (integer code), 2 levels: 0=1 1=2
+- [625]       categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [626]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [627]       categorical (integer code), 7 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6
+- [628]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [629]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [630]       categorical (integer code), 5 levels: 0=0 1=1 2=2 3=3 4=4
+- [631]       categorical (integer code), 5 levels: 0=0 1=1 2=2 3=3 4=4
+- [632]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [633]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [634]       categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [635]       categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [636]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [637]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [638]       categorical (integer code), 7 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6
+- [639]       categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [640]       categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [641]       categorical (integer code), 5 levels: 0=0 1=1 2=2 3=3 4=4
+- [642]       categorical (integer code), 7 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6
+- [643]       categorical (integer code), 8 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6 7=7
+- [644]       categorical (integer code), 5 levels: 0=0 1=1 2=2 3=3 4=4
+- [645]       categorical (integer code), 7 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6
+- [646]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [647]       categorical (integer code), 5 levels: 0=0 1=1 2=2 3=3 4=4
+- [648]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [649]       categorical (integer code), 7 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6
+- [650]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [651]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [652]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [653]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [654]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [655]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [656]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [657]       categorical (integer code), 5 levels: 0=0 1=1 2=2 3=3 4=4
+- [658]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [659]       categorical (integer code), 8 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6 7=7
+- [660]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [661]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [662]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [663]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [664]       categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [665]       categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [666]       categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [667]       categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [668]       categorical (integer code), 1 levels: 0=1
+- [669]       categorical (integer code), 1 levels: 0=1
+- [670]       categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [671]       categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [672]       categorical (integer code), 10 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6 7=7 8=8 9=9
+- [673]       categorical (integer code), 10 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6 7=7 8=8 9=9
+- [674]       categorical (integer code), 10 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6 7=7 8=8 9=9
+- [675]       categorical (integer code), 10 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6 7=7 8=8 9=9
+- [676]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [677]       categorical (integer code), 2 levels: 0=0 1=1
+- [678]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [679]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [680]       categorical (integer code), 5 levels: 0=0 1=1 2=2 3=3 4=4
+- [681]       categorical (integer code), 2 levels: 0=0 1=1
+- [682]       categorical (integer code), 2 levels: 0=0 1=1
+- [683]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [684]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [685]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [686]       categorical (integer code), 5 levels: 0=0 1=1 2=2 3=3 4=4
+- [687]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [688]       categorical (integer code), 5 levels: 0=0 1=1 2=2 3=3 4=4
+- [689]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [690]       categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [691]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [692]       categorical (integer code), 6 levels: 0=0 1=1 2=2 3=3 4=4 5=5
+- [693]       categorical (integer code), 3 levels: 0=0 1=1 2=2
+- [694]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+- [695]       categorical (integer code), 4 levels: 0=0 1=1 2=2 3=3
+
+PROTOCOL
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated probabilities and handle class imbalance if present
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs
