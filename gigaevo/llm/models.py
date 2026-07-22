@@ -138,6 +138,23 @@ _STRUCTURED_METHOD_CHAIN: tuple[_StructuredMethod, ...] = (
 )
 
 
+def _schema_for_method(schema: Any, method: str | None) -> Any:
+    """Translate the named JSON-schema wrapper into the selected wire format."""
+    if (
+        method == "function_calling"
+        and isinstance(schema, dict)
+        and isinstance(schema.get("schema"), dict)
+    ):
+        function = {
+            "name": str(schema.get("name") or schema["schema"].get("title", "output")),
+            "parameters": schema["schema"],
+        }
+        if schema.get("description"):
+            function["description"] = schema["description"]
+        return function
+    return schema
+
+
 class MultiModelRouter(Runnable):
     """Probabilistic model router with token tracking and Langfuse tracing.
 
@@ -437,8 +454,10 @@ class MultiModelRouter(Runnable):
             return _AutoStructuredOutputRouter(self, schema)
         if self._structured_output_method is not None:
             kwargs.setdefault("method", self._structured_output_method)
+        method = kwargs.get("method")
+        wire_schema = _schema_for_method(schema, method)
         wrapped = [
-            m.with_structured_output(schema, include_raw=True, **kwargs)
+            m.with_structured_output(wire_schema, include_raw=True, **kwargs)
             for m in self.models
         ]
         return _StructuredOutputRouter(
@@ -574,7 +593,9 @@ class _AutoStructuredOutputRouter(Runnable):
         self, model: ChatOpenAI, name: str, method: _StructuredMethod
     ) -> _StructuredOutputRouter:
         wrapped = model.with_structured_output(
-            self._schema, include_raw=True, method=method
+            _schema_for_method(self._schema, method),
+            include_raw=True,
+            method=method,
         )
         return _StructuredOutputRouter(
             [wrapped],

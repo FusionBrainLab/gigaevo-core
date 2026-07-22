@@ -25,16 +25,18 @@ PAYLOAD = {
         }
     ],
     "base_parent": "A",
-    "slot_1": {
-        "kind": "new",
-        "id": "population_per_occupancy",
-        "input_cols": ["x4", "x5"],
-        "output_cols": ["fe_population_per_occupancy"],
-        "code": "df['fe_population_per_occupancy'] = df['x4'] / (df['x5'].abs() + 1e-6)\nreturn df",
-        "rationale": "Estimate block-group density per average occupancy.",
-        "is_output": True,
-    },
-    "slot_2": None,
+    "structural_intent": "local_edit",
+    "nodes": [
+        {
+            "kind": "new_rowwise",
+            "id": "population_per_occupancy",
+            "input_cols": ["x4", "x5"],
+            "output_cols": ["fe_population_per_occupancy"],
+            "code": "df['fe_population_per_occupancy'] = df['x4'] / (df['x5'].abs() + 1e-6)\nreturn df",
+            "rationale": "Estimate block-group density per average occupancy.",
+            "is_output": True,
+        }
+    ],
 }
 
 
@@ -89,10 +91,8 @@ async def test_generic_operator_evolves_feature_graph_json():
     assert spec.parents == [parent]
     assert spec.metadata[MutationSpec.META_OUTPUT] == PAYLOAD
     assert spec.mutation_archetype == "Guided Innovation"
-    assert router.kwargs_seen == {"method": "json_schema"}
+    assert router.kwargs_seen == {}
     assert router.schema_seen["name"] == "dag_tab_feature_graph_diff"
-    assert "POSITIONAL-SLOT TABULAR FEATURE-GRAPH DIFF" in (
-        router.messages_seen[0].content
-    )
-    assert "a1" in router.messages_seen[1].content
+    assert "TABULAR FEATURE-GRAPH DIFF" in (router.messages_seen[0].content)
+    assert "income_per_age" in router.messages_seen[1].content
     assert json.loads(spec.code)["dataset"] == "california"

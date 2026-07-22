@@ -22,6 +22,7 @@ from gigaevo.evolution.engine.snapshot import (
 from gigaevo.evolution.engine.stopper import (
     EvolutionStopper,
     StopContext,
+    StopDecision,
 )
 from gigaevo.evolution.mutation.base import MutationOperator
 from gigaevo.evolution.mutation.constants import (
@@ -43,7 +44,10 @@ from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
-from gigaevo.utils.metrics_collector import start_metrics_collector
+from gigaevo.utils.metrics_collector import (
+    collect_metrics_once,
+    start_metrics_collector,
+)
 from gigaevo.utils.metrics_tracker import MetricsTracker
 from gigaevo.utils.trackers.base import LogWriter
 
@@ -82,6 +86,7 @@ class EvolutionEngine:
         self._writer = writer.bind(path=["evolution_engine"])
 
         self._running = False
+        self._terminal_stop_decision: StopDecision | None = None
         self._resumed = False
         self._last_pending_dags_counts: tuple[int, int] | None = None
 
@@ -95,6 +100,7 @@ class EvolutionEngine:
         self.metrics = EngineMetrics()
         self.state = ProgramStateManager(self.storage)
         self._metrics_tracker = metrics_tracker
+        self._metrics_collect_fn: Callable[[], Awaitable[dict[str, Any]]] | None = None
         self._pre_step_hook = pre_step_hook
         self._post_step_hook = post_step_hook
         self._post_run_hook = post_run_hook or NullPostRunHook()
@@ -138,6 +144,7 @@ class EvolutionEngine:
                 out["bandit"] = self.mutation_operator.llm_wrapper.get_bandit_stats()
             return out
 
+        self._metrics_collect_fn = _collect_metrics
         self._metrics_collector_task = start_metrics_collector(
             writer=self._writer,
             collect_fn=_collect_metrics,
@@ -168,10 +175,14 @@ class EvolutionEngine:
                 await asyncio.wait_for(self._metrics_collector_task, timeout=2.0)
             self._metrics_collector_task = None
 
+        if self._metrics_collect_fn is not None:
+            await collect_metrics_once(
+                writer=self._writer,
+                collect_fn=self._metrics_collect_fn,
+            )
+
         if self._metrics_tracker:
             await self._metrics_tracker.stop()
-
-        await self.storage.close()
 
     @property
     def task(self) -> asyncio.Task | None:
@@ -695,8 +706,12 @@ class EvolutionEngine:
     def _can_dispatch_mutant(self, *, reserved: int) -> bool:
         """Authorize one dispatch while accounting for concurrent reservations."""
 
+        if self._terminal_stop_decision is not None:
+            return False
         context = self.build_stop_context()
-        if self.stopper.should_stop(context).stop:
+        decision = self.stopper.should_stop(context)
+        if decision.stop:
+            self._terminal_stop_decision = decision
             return False
         remaining = self.stopper.remaining_dispatches(context)
         return remaining is None or reserved < remaining

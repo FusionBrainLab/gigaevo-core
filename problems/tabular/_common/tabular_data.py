@@ -64,23 +64,52 @@ def _load_npy(folder: Path, stem: str) -> np.ndarray | None:
     return np.load(path, allow_pickle=True)
 
 
+def _category_key(value: object) -> str:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "__MISSING__"
+    return str(value)
+
+
+def _levels(column: np.ndarray) -> tuple[str, ...]:
+    """Train-only vocabulary, ordered by the column's own dtype.
+
+    Sorting the string form would renumber integer categories ("10" before
+    "2"), silently changing every published code for datasets that store
+    categories as integers. Missing values have no natural position and
+    sort last.
+    """
+
+    present = [v for v in column if _category_key(v) != "__MISSING__"]
+    levels = [_category_key(v) for v in np.unique(present)] if present else []
+    if len(present) < column.shape[0]:
+        levels.append("__MISSING__")
+    return tuple(dict.fromkeys(levels))
+
+
 def _encode_categoricals(
     cat_tr: np.ndarray, cat_va: np.ndarray, cat_te: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[tuple[str, ...]]]:
+    """Fit data-inferred vocabularies on train and map unseen values to -1."""
+
     n_cols = cat_tr.shape[1]
-    n_tr, n_va = cat_tr.shape[0], cat_va.shape[0]
     codes_tr = np.empty(cat_tr.shape, dtype=np.float64)
     codes_va = np.empty(cat_va.shape, dtype=np.float64)
     codes_te = np.empty(cat_te.shape, dtype=np.float64)
     vocab: list[tuple[str, ...]] = []
     for j in range(n_cols):
-        col = np.concatenate([cat_tr[:, j], cat_va[:, j], cat_te[:, j]])
-        uniq, inv = np.unique(col, return_inverse=True)  # uniq sorted; inv = codes
-        inv = inv.astype(np.float64)
-        codes_tr[:, j] = inv[:n_tr]
-        codes_va[:, j] = inv[n_tr : n_tr + n_va]
-        codes_te[:, j] = inv[n_tr + n_va :]
-        vocab.append(tuple(str(u) for u in uniq))
+        levels = _levels(cat_tr[:, j])
+        mapping = {value: code for code, value in enumerate(levels)}
+
+        def encode(values: np.ndarray) -> np.ndarray:
+            return np.asarray(
+                [mapping.get(_category_key(value), -1) for value in values],
+                dtype=np.float64,
+            )
+
+        codes_tr[:, j] = encode(cat_tr[:, j])
+        codes_va[:, j] = encode(cat_va[:, j])
+        codes_te[:, j] = encode(cat_te[:, j])
+        vocab.append(levels)
     return codes_tr, codes_va, codes_te, vocab
 
 

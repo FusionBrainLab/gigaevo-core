@@ -145,7 +145,7 @@ python run.py problem.name=toy_example \
 |-------|---------|
 | `experiment` | `base`, `full_featured`, `prompt_coevolution` |
 | `algorithm` | `single_island_no_distant_parents` (default), `single_island`, `single_island_2d`, `multi_island`, `topology_3d` (+ `_ret` variant), `chains_bd3d` (chain-strategy 3D behavior space: hop_depth × passages_fetched × instr_chars; requires `enable_chain_structural_metrics=true` + `program_format=json_document` via `algorithm_requires`) |
-| `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `balanced`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini3_flash`, `gemini35_flash` |
+| `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `balanced`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini3_flash`, `gemini3_flash_high` (fast gemini-3-flash, reasoning=high), `gemini35_flash` |
 | `pipeline` | `guided` (default), `memory_guided` (see [MEMORY_GUIDED_PIPELINE.md](MEMORY_GUIDED_PIPELINE.md)), `memory_guided_noise` (memory_guided + per-sample score transport for the paired archive gate), `guided_noise` (same score transport on the plain guided DAG — the no-memory arm), `custom`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `prompt_evolution`, `optuna_opt` |
 | `archive_selector` | `point` (default — replace elite iff weighted fitness sum is higher), `paired_bootstrap` (noise-aware paired bootstrap gate, knob: `archive_selector.p_accept`; needs a per-sample-score problem + `pipeline=memory_guided_noise` or `guided_noise`) |
 | `program_format` | `python_source` (default), `json_document` |

@@ -27,31 +27,31 @@ specs:
     include_in_prompts: true
     significant_change: 0.01
   graph_node_count:
-    description: Number of pandas transformation nodes in the FeatureGraph.
+    description: Diagnostic count of pandas transformation nodes; not an optimization objective.
     decimals: 0
     is_primary: false
     higher_is_better: false
-    lower_bound: 1.0
+    lower_bound: 0.0
     upper_bound: 16.0
-    include_in_prompts: true
+    include_in_prompts: false
     significant_change: 1.0
   graph_max_depth:
-    description: Longest dependency path in the FeatureGraph.
+    description: Diagnostic longest dependency path; depth is neutral and useful when composition adds signal.
     decimals: 0
     is_primary: false
     higher_is_better: false
-    lower_bound: 1.0
+    lower_bound: 0.0
     upper_bound: 16.0
-    include_in_prompts: true
+    include_in_prompts: false
     significant_change: 1.0
   generated_feature_count:
-    description: Number of generated columns exported to the fixed estimator.
+    description: Diagnostic count of generated columns exported to the fixed estimator; not an optimization objective.
     decimals: 0
     is_primary: false
     higher_is_better: false
-    lower_bound: 1.0
+    lower_bound: 0.0
     upper_bound: 64.0
-    include_in_prompts: true
+    include_in_prompts: false
     significant_change: 1.0
   local_lipschitz_p95:
     description: Existing tabular behavior descriptor for local prediction sensitivity.

@@ -294,8 +294,10 @@ def _render_frontier_plot(
             linewidth=1.5,
             color="#ff7f0e",
             linestyle="--",
-            label=f"Per-iter mean {metric}",
-            zorder=2,
+            marker="o",
+            markersize=4,
+            label=f"Per-item mean {metric}",
+            zorder=4,
         )
 
     try:

@@ -6,6 +6,10 @@ pydantic annotations without validation semantics under guided decoding. The
 rewrites here produce an equivalent schema in the portable subset; vLLM accepts
 both forms, so callers can emit the portable form unconditionally.
 
+Gemini also 400s on `maxItems` when the array's `items` is an `anyOf` union
+(probed 2026-07-22; `minItems` is accepted). No rewrite preserves that bound, so
+schemas state the cap in the field description instead of emitting it.
+
 Keys inside a `properties` map are field names, never schema keywords — all
 transforms leave them untouched.
 """

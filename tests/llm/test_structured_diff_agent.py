@@ -100,9 +100,23 @@ async def test_arun_returns_valid_child_code_and_diff():
     child = json.loads(result["code"])
     assert len(child["steps"]) == 3
     assert result["diff"] == DIFF_PAYLOAD
-    assert router.kwargs_seen == {"method": "json_schema"}
+    assert router.kwargs_seen == {}
     assert router.schema_seen["name"] == "chain_dag_diff"
     assert router.schema_seen["schema"]["title"] == "chain_dag_diff"
+
+
+async def test_structured_diff_uses_router_configured_transport():
+    agent, router, changes = _make_agent(DIFF_PAYLOAD)
+    parents_map = {"A": make_genome(2)}
+    parents = [Program(code=parents_map["A"], iteration=0)]
+
+    await agent.arun(
+        parents=parents,
+        parents_map=parents_map,
+        diff_schema=changes.build_schema(parents_map),
+    )
+
+    assert router.kwargs_seen == {}
 
 
 async def test_prompt_contains_parents_and_diff_language():

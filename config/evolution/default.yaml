@@ -25,6 +25,7 @@ engine_config:
   max_in_flight: ${max_in_flight}
   post_step_hook_timeout_s: ${post_step_hook_timeout_s}
   terminal_drain_timeout_s: ${dag_timeout}
+  max_consecutive_mutation_failures: ${max_consecutive_mutation_failures}
   post_cap_drain_grace_s: ${post_cap_drain_grace_s}
   coalesce_refresh: ${oc.select:memory.coalesce_refresh,true}
 

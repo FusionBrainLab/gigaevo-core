@@ -87,9 +87,11 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             total_mutants=self.metrics.mutations_created,
             next_iteration=self.metrics.iteration,
             programs_processed=self.metrics.programs_processed,
+            completion_reason=None,
         )
 
         terminally_drained = False
+        completion_reason: str | None = None
         try:
             # Phase 0: drain initial seed population (already QUEUED by loader)
             await self._await_idle()
@@ -129,14 +131,21 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             # already-dispatched producer finished its child handoff. Keep the
             # ingestor alive until all registered child DAGs have terminal,
             # durable outcomes.
-            await self._dispatcher_task
+            decision = await self._dispatcher_task
+            completion_reason = decision.code or (
+                "stopper_reached" if decision.stop else "dispatcher_completed"
+            )
             await self._await_terminal_drain()
             terminally_drained = True
             self._running = False
             await self._ingestor_task
 
         except asyncio.CancelledError:
+            completion_reason = "external_signal"
             logger.debug("[SteadyState] run() cancelled")
+            raise
+        except Exception:
+            completion_reason = "engine_error"
             raise
         finally:
             # asyncio.wait() does NOT cancel its waited tasks when the
@@ -179,6 +188,7 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                     total_mutants=self.metrics.mutations_created,
                     next_iteration=self.metrics.iteration,
                     programs_processed=self.metrics.programs_processed,
+                    completion_reason=completion_reason or "shutdown",
                 )
 
             try:

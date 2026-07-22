@@ -1,50 +1,62 @@
-TASK — EVOLVE A FEATURE DAG FOR AN EXISTING GIGAEVO TABULAR DATASET
+TASK
+Evolve a versioned JSON FeatureGraph for supervised tabular learning. The selected dataset and its column semantics are appended to this universal ABI at runtime. Fitness is produced by the fixed evaluation protocol; improve useful validation signal without leaking validation or test information.
 
-The candidate program is a JSON FeatureGraph. Its dataset field names one dataset from problems/tabular (for example california). The fixed downstream CatBoost estimator and the existing tabular cross-validation protocol are not evolved. Improve predictive fitness by evolving pandas feature transformations.
+GENOME CONTRACT
+The genome is one JSON FeatureGraph:
+- schema_version: 1
+- dataset: selected dataset id; immutable during mutation
+- raw_columns: immutable names x0..xN-1 supplied by the dataset loader
+- dropped_raw_columns: optional raw columns hidden from CatBoost but still usable by graph nodes
+- target: optional invertible regression-only target transform
+- nodes: topologically ordered feature nodes; the neutral seed may contain no nodes
 
-GRAPH CONTRACT
-- nodes are listed in topological order
-- raw columns are x0, x1, ... in the exact order exposed by the selected dataset
-- dependencies refer to earlier node ids
-- input_cols may use raw columns or outputs of declared dependencies
-- output_cols must be globally unique and must not overwrite raw columns
-- is_output=true exports that node's output columns to the fixed estimator
-- at least one node must be exported
+Each node declares id, kind, dependencies, input_cols, output_cols, output_types, code, rationale, and is_output. Generated inputs must come from declared earlier dependencies. input_cols and dependencies are synchronized from literal df/df_fit column reads where those can be read off the code; otherwise your declaration is taken as written, and a column you read but did not declare is simply not present at run time.
 
-NODE CODE ABI
-Each node.code is the body of a Python function receiving a pandas DataFrame named df. numpy is available as np and pandas as pd.
-- explicitly create every declared output with df['column'] = ...
-- preserve row count and index
-- create no undeclared columns
-- use only the declared input columns
-- finish with return df
-- do not import modules, access files/network/processes, inspect private attributes, or use eval/exec
-- never access the target; y is not available
+NODE ABI
+Your node receives exactly the columns listed in input_cols, in that order, and nothing
+else. df is that slice: df.to_numpy() is your declared inputs as a matrix, not the whole
+dataset, and a column you read but did not declare is not there to be read.
 
-SPLIT-INVARIANT FEATURE PROTOCOL
-The same stateless graph is applied separately to train, validation, and query rows. Therefore node code must be row-wise: a row's output may depend only on that row's declared inputs and fixed numeric constants. Dataset/batch statistics and order-dependent operations are forbidden, including mean/median/std/min/max/sum/quantile/rank/qcut/cut with learned edges, groupby/value_counts, rolling/expanding, shift/diff/pct_change, and cumulative operations; row-wise reductions across columns with explicit axis=1 are allowed. Validation runs a batch-invariance probe, and graphs whose outputs change with batch composition are rejected. This prevents query-batch covariates from changing predictions. A future stateful fit/transform ABI may add train-fitted aggregate features, but the current ABI does not support them.
+rowwise code may be either a transform(df) function or its function body. It is called
+once per row block, so a row's output must depend on that row alone.
 
-COUNTERFACTUAL FEATURE REASONING
-Treat each node as an explicit, falsifiable feature hypothesis. The rationale must state:
-1. what latent signal or nuisance factor the new column exposes;
-2. why this exact operation is appropriate for the declared source columns;
-3. what predictive information, invariance, or numerical robustness is missing without it;
-4. why a simpler existing/raw feature does not already provide the same signal.
-Do not merely restate the formula. Prefer domain-interpretable names and compact hypotheses that can be compared with parent evidence.
+aggregate code may be either a transform(df_fit, y_fit, df) function or its function
+body, and is called once per graph execution. df_fit is the frozen fitting frame; y_fit
+is its target, supplied as a one-dimensional numpy.ndarray during scored evaluation; df
+is every row to be featurised, and its first len(df_fit) rows are the rows of df_fit, in
+order. Any deterministic state may be fitted from df_fit and, when supervised, from
+y_fit -- summary statistics, vocabularies, estimators, search structures, reference sets
+-- and then queried for each row of df. State is fitted from the fitting rows only:
+there is no validation split and no y for any later row. Third-party libraries installed
+in the environment may be imported and used.
 
-For the baseline california dataset, the Pydantic raw-column names have these meanings:
-- x0 MedInc: median household income in the block group, units of $10k
-- x1 HouseAge: median house age, years
-- x2 AveRooms: average rooms per household
-- x3 AveBedrms: average bedrooms per household
-- x4 Population: block-group population count
-- x5 AveOccup: average occupants per household
-- x6 Latitude: latitude in degrees
-- x7 Longitude: longitude in degrees
+Two invariants are required, and validation probes them by re-executing your graph. A
+row's output may depend on any row of df_fit, but never on which other rows of df happen
+to be present. And for the first len(df_fit) rows -- rows at positions below len(df_fit)
+are fitting rows, and you may test that positionally -- a supervised output must not
+change when only that row's own y_fit changes; exclude each fitting row's own
+contribution, by position or by fold. When producing a fitting row's supervised value
+out of fold, every quantity feeding it -- including any smoothing prior,
+Bayesian/shrinkage default, and the fallback for unseen categories -- must itself be
+computed from the same out-of-fold subset that excludes that row. A global statistic
+over all fitting rows, such as the overall target mean used as a prior or default, still
+contains that row's own target and leaks even when the fold means themselves are clean.
+For example, computing per-fold group means but filling unseen groups with the overall
+mean of y_fit, or shrinking each group mean toward that overall mean as a prior, both
+leak, because that overall mean includes the row being encoded; take the fallback and the
+prior from the row's own out-of-fold split instead.
+Rows at or beyond that position may use state fitted from all fitting targets.
 
-Example code:
-df['fe_ratio'] = df['x2'] / (df['x3'].abs() + 1e-6)
-return df
+Both kinds must add exactly their declared output columns to the received df and return that same df with unchanged row count, index, and all declared inputs; do not construct a fresh DataFrame that omits the declared inputs. Code runs as trusted Python under static and behavioral validation, not as a security sandbox.
 
-EVOLUTION
-The structured positional-slot mutation may retain, edit, omit, reorder, rewire, or add multiple nodes in one child graph. Use the parent's evaluation evidence to decide which components to keep. Prefer meaningful, numerically stable ratios, interactions, nonlinear transforms, clipping, binning, and domain-informed combinations. Keep the graph compact unless added depth improves validation fitness.
+TYPES AND OUTPUTS
+output_types are numerical, categorical, binary, or ordinal. Declare a label-like output such as a cluster id, bucket, or category categorical, or, if numerical, emit integer codes; object or string dtype fails a numerical declaration. Every non-empty graph must expose at least one non-sample_weight generated output through is_output=true. Raw columns remain estimator inputs unless listed in dropped_raw_columns. sample_weight is reserved and removed before CatBoost feature fitting.
+
+LEAKAGE AND ROBUSTNESS
+Never infer feature semantics from target values, validation results, or test/query rows. Fit aggregate state and categorical vocabularies on training data only. Handle missing values, unknown categories, zero denominators, non-finite values, and domain restrictions explicitly. Prefer compact hypotheses grounded in the appended dataset description; for anonymized columns, rely only on numerical behavior and declared types rather than invented real-world meanings.
+
+TARGET TRANSFORM
+A target transform contains code and inverse_code, is regression-only, and must be deterministic, finite, and round-trip to the original target within tolerance. code receives y_fit and y and returns the transformed target; inverse_code receives y_fit and predictions and returns predictions mapped back to the original target scale. Final test refit recomputes aggregate and target-transform state on train+validation.
+
+SEARCH GUIDANCE
+Start from the raw-feature neutral baseline and make one coherent mutation. Every diff declares structural_intent: local_edit, extend_chain, compose_chain, or simplify_graph. Use extend_chain when a useful parent intermediate should gain another processing stage; it must increase parent depth. Use compose_chain to create a new multi-stage path of depth at least 2, and set minimum_child_depth when targeting a longer path. Graph size and depth are diagnostic descriptors, not objectives to minimize: retain useful parent nodes, prune redundant ones, and use the available node budget when additional signal is justified. Prefer a composed node over recomputing the same intermediate expression from raw columns. Place producers before consumers; read the producer's output column in the consumer code and input_cols, and name the producer id in dependencies. Keep intermediate nodes is_output=false unless CatBoost also benefits from the intermediate value. Independent raw-derived features remain appropriate when there is no meaningful reusable intermediate. Keep rationales short and never add depth solely for complexity.

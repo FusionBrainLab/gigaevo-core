@@ -13,9 +13,10 @@ import asyncio
 from loguru import logger
 
 from gigaevo.evolution.engine.mutant_task import run_one_mutant
+from gigaevo.evolution.engine.stopper import StopDecision
 
 
-async def dispatcher_loop(engine) -> None:
+async def dispatcher_loop(engine) -> StopDecision:
     logger.info("[dispatcher] start")
     active: set[asyncio.Task] = set()
     failures: list[BaseException] = []
@@ -49,44 +50,60 @@ async def dispatcher_loop(engine) -> None:
 
     try:
         while engine._running:
-            while engine._running and engine._can_dispatch_mutant(reserved=len(active)):
-                await engine._producer_sema.acquire()
-                # A producer releases its slot immediately before completing. Its
-                # done callback may be queued behind this waiter, so inspect the
-                # task objects directly before authorizing another mutation.
-                for finished in tuple(active):
-                    if finished.done():
-                        task_finished(finished)
-                if failures:
-                    engine._producer_sema.release()
-                    raise failures[0]
-                if not engine._running or not engine._can_dispatch_mutant(
-                    reserved=len(active)
-                ):
-                    # Post-acquire early-stop: hand the slot back so a graceful
-                    # restart finds _producer_sema at full capacity.
-                    engine._producer_sema.release()
-                    break
-                t = asyncio.create_task(
-                    run_one_mutant(engine, task_id), name=f"mutant-{task_id}"
-                )
-                task_id += 1
-                active.add(t)
-                t.add_done_callback(task_finished)
-
-            # Reservations make a hard mutation cap exact, but a producer can
-            # still return no child. Settle the final reservations and refill
-            # only their shortfall before declaring dispatch complete.
-            if active:
-                remaining = tuple(active)
-                await asyncio.gather(*remaining, return_exceptions=True)
-                for finished in remaining:
+            for finished in tuple(active):
+                if finished.done():
                     task_finished(finished)
             if failures:
                 raise failures[0]
-            if not engine._can_dispatch_mutant(reserved=0):
+            if not engine._can_dispatch_mutant(reserved=len(active)):
+                if getattr(engine, "_terminal_stop_decision", None) is not None:
+                    break
+                if active:
+                    await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+                    continue
                 break
+
+            await engine._producer_sema.acquire()
+            # A producer releases its slot immediately before completing. Its
+            # done callback may be queued behind this waiter, so inspect the
+            # task objects directly before authorizing another mutation.
+            for finished in tuple(active):
+                if finished.done():
+                    task_finished(finished)
+            if failures:
+                engine._producer_sema.release()
+                raise failures[0]
+            if not engine._running:
+                engine._producer_sema.release()
+                break
+            if not engine._can_dispatch_mutant(reserved=len(active)):
+                engine._producer_sema.release()
+                if getattr(engine, "_terminal_stop_decision", None) is not None:
+                    break
+                continue
+            task = asyncio.create_task(
+                run_one_mutant(engine, task_id), name=f"mutant-{task_id}"
+            )
+            task_id += 1
+            active.add(task)
+            task.add_done_callback(task_finished)
+
+        # Reaching the cap stops new production; it does not cancel producers
+        # that already crossed the dispatch boundary. Their persisted children
+        # must complete the handoff while the ingestor is still running.
+        if active:
+            remaining = tuple(active)
+            await asyncio.gather(*remaining, return_exceptions=True)
+            for finished in remaining:
+                task_finished(finished)
+        if failures:
+            raise failures[0]
+        decision = getattr(engine, "_terminal_stop_decision", None) or StopDecision(
+            stop=False,
+            reason="dispatcher completed without a terminal stopper decision",
+        )
         completed_normally = True
+        return decision
     finally:
         if not completed_normally:
             for t in active:

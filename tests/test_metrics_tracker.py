@@ -592,6 +592,31 @@ class TestLifecycle:
         assert tracker._running is False
         assert tracker._task is None
 
+    @pytest.mark.asyncio
+    async def test_stop_drains_program_completed_after_last_poll(self) -> None:
+        program = _make_program(
+            metrics={VALIDITY_KEY: 1.0, "score": 0.75},
+            iteration=4,
+            prog_id="late-program",
+        )
+        storage = _mock_storage([program])
+        writer = RecordingWriter()
+        tracker = MetricsTracker(
+            storage=storage,
+            metrics_context=_make_metrics_context(),
+            writer=writer,
+            interval=3600.0,
+        )
+        tracker._seen_ids.clear()
+
+        await tracker.stop()
+
+        assert "late-program" in tracker._seen_ids
+        assert any(
+            tag == "valid/program/score" and value == pytest.approx(0.75)
+            for tag, value, _ in writer.scalars
+        )
+
 
 # ---------------------------------------------------------------------------
 # Additional tests from audit: value assertions, edge cases, missing paths

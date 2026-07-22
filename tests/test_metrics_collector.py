@@ -14,7 +14,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from gigaevo.utils.metrics_collector import start_metrics_collector
+from gigaevo.utils.metrics_collector import (
+    collect_metrics_once,
+    start_metrics_collector,
+)
 from gigaevo.utils.trackers.base import LogWriter
 
 # ---------------------------------------------------------------------------
@@ -63,6 +66,18 @@ def _make_stop_after(n_calls: int):
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+class TestCollectMetricsOnce:
+    async def test_writes_final_numeric_snapshot(self) -> None:
+        writer = RecordingWriter()
+
+        await collect_metrics_once(
+            writer=writer,
+            collect_fn=lambda: {"completed": 5, "ignored": "text"},
+        )
+
+        assert writer.calls == [("completed", 5.0)]
 
 
 class TestStartMetricsCollector:

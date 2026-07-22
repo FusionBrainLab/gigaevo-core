@@ -239,3 +239,37 @@ async def test_dispatcher_reservations_make_success_cap_exact(monkeypatch) -> No
 
     assert engine.created == limit
     assert spawned == list(range(limit))
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_replaces_failed_reserved_attempt_until_success_cap(
+    monkeypatch,
+) -> None:
+    limit = 4
+    engine = SimpleNamespace(
+        _running=True,
+        _producer_sema=asyncio.Semaphore(2),
+        _terminal_stop_decision=None,
+        created=0,
+        config=SimpleNamespace(max_consecutive_mutation_failures=3),
+    )
+    engine._can_dispatch_mutant = lambda *, reserved: engine.created + reserved < limit
+    spawned: list[int] = []
+
+    async def mutant_with_one_failure(active_engine, task_id):
+        spawned.append(task_id)
+        await asyncio.sleep(0)
+        active_engine._producer_sema.release()
+        if task_id == 1:
+            return None
+        active_engine.created += 1
+        return f"child-{task_id}"
+
+    monkeypatch.setattr(
+        "gigaevo.evolution.engine.dispatcher.run_one_mutant", mutant_with_one_failure
+    )
+
+    await asyncio.wait_for(dispatcher_loop(engine), timeout=1.0)
+
+    assert engine.created == limit
+    assert spawned == [0, 1, 2, 3, 4]

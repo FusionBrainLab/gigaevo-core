@@ -141,7 +141,7 @@ class MetricsTracker:
         logger.info("[MetricsTracker] started (interval={}s)", self._interval)
 
     async def stop(self) -> None:
-        """Cancel tracker task and await it."""
+        """Stop polling after one final storage drain."""
         self._running = False
         task = self._task
         self._task = None
@@ -149,6 +149,10 @@ class MetricsTracker:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+        try:
+            await self._drain_once()
+        except Exception:
+            logger.exception("[MetricsTracker] final _drain_once() failed")
         logger.info("[MetricsTracker] stopped")
 
     # -------- main loop --------

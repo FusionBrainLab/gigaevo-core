@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 import contextlib
 import ctypes
 from datetime import UTC, datetime
@@ -26,7 +27,10 @@ from gigaevo.programs.dag.dag import DAG
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.runner.dag_blueprint import DAGBlueprint
-from gigaevo.utils.metrics_collector import start_metrics_collector
+from gigaevo.utils.metrics_collector import (
+    collect_metrics_once,
+    start_metrics_collector,
+)
 from gigaevo.utils.trackers.base import LogWriter
 
 
@@ -183,6 +187,7 @@ class DagRunner:
 
         # async metrics collector task (no threads)
         self._metrics_collector_task: asyncio.Task | None = None
+        self._metrics_collect_fn: Callable[[], Awaitable[dict[str, Any]]] | None = None
 
     @property
     def task(self) -> asyncio.Task | None:
@@ -201,6 +206,7 @@ class DagRunner:
             metrics_dict["dag_active_count"] = float(self.active_count())
             return metrics_dict
 
+        self._metrics_collect_fn = _collect_metrics
         self._metrics_collector_task = start_metrics_collector(
             writer=self._writer,
             collect_fn=_collect_metrics,
@@ -219,7 +225,9 @@ class DagRunner:
                 await self._task
             self._task = None
 
-        # cancel all active DAG tasks
+        # Harvest DAGs that completed between the scheduler's last maintain pass
+        # and shutdown before cancelling work that is genuinely still active.
+        await self._maintain()
         for info in list(self._active.values()):
             await self._cancel_task(info)
         self._active.clear()
@@ -230,9 +238,14 @@ class DagRunner:
         # cancel metrics collector task
         if self._metrics_collector_task:
             self._metrics_collector_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._metrics_collector_task
             self._metrics_collector_task = None
-
-        await self._storage.close()
+        if self._metrics_collect_fn is not None:
+            await collect_metrics_once(
+                writer=self._writer,
+                collect_fn=self._metrics_collect_fn,
+            )
 
     def active_count(self) -> int:
         return sum(1 for info in self._active.values() if not info.task.done())

@@ -15,6 +15,28 @@ async def _maybe_await(x: Any) -> Any:
     return await x if inspect.isawaitable(x) else x
 
 
+async def collect_metrics_once(
+    *,
+    writer: LogWriter,
+    collect_fn: Callable[
+        [],
+        dict[str, Any]
+        | asyncio.Future[dict[str, Any]]
+        | Coroutine[Any, Any, dict[str, Any]],
+    ],
+) -> None:
+    """Collect and write one best-effort numeric metrics snapshot."""
+
+    try:
+        metrics = await _maybe_await(collect_fn())
+        if metrics:
+            for key, value in metrics.items():
+                if isinstance(value, (int, float, bool)):
+                    writer.scalar(key, float(value))
+    except Exception as exc:
+        logger.debug("[MetricsCollector] Error collecting metrics: {}", exc)
+
+
 def start_metrics_collector(
     *,
     writer: LogWriter,
@@ -44,17 +66,7 @@ def start_metrics_collector(
     async def _run() -> None:
         next_tick = loop.time()
         while not stop_flag():
-            try:
-                metrics = await _maybe_await(collect_fn())
-                if metrics:
-                    for k, v in metrics.items():
-                        if not isinstance(v, (int, float, bool)):
-                            continue
-                        writer.scalar(k, float(v))
-            except Exception as e:
-                logger.debug("[MetricsCollector] Error collecting metrics: {}", e)
-                await asyncio.sleep(interval)
-                continue
+            await collect_metrics_once(writer=writer, collect_fn=collect_fn)
 
             next_tick += interval
             await asyncio.sleep(max(0.0, next_tick - loop.time()))

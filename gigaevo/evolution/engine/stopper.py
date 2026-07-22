@@ -22,6 +22,7 @@ class StopContext:
 class StopDecision:
     stop: bool
     reason: str
+    code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ class MaxMutantsStopper(EvolutionStopper):
             return StopDecision(
                 stop=True,
                 reason=f"Reached max_mutants={self.max_mutants}",
+                code="max_mutants_reached",
             )
         return StopDecision(stop=False, reason="")
 
@@ -79,6 +81,7 @@ class WallClockStopper(EvolutionStopper):
             return StopDecision(
                 stop=True,
                 reason=f"Wall clock budget exceeded: {ctx.elapsed_seconds:.0f}s >= {self.budget_seconds:.0f}s",
+                code="wall_time_limit",
             )
         return StopDecision(stop=False, reason="")
 
@@ -119,6 +122,7 @@ class FitnessPlateauStopper(EvolutionStopper):
             return StopDecision(
                 stop=True,
                 reason=f"Fitness plateau: no improvement >= {self.min_delta} for {self.window} mutants",
+                code="fitness_plateau",
             )
         return StopDecision(stop=False, reason="")
 
@@ -141,11 +145,17 @@ class CompositeStopper(EvolutionStopper):
 
         if self.mode == "any" and triggered:
             reasons = "; ".join(d.reason for d in triggered)
-            return StopDecision(stop=True, reason=reasons)
+            codes = "+".join(d.code for d in triggered if d.code)
+            return StopDecision(
+                stop=True, reason=reasons, code=codes or "composite_stop"
+            )
 
         if self.mode == "all" and len(triggered) == len(self.children):
             reasons = "; ".join(d.reason for d in triggered)
-            return StopDecision(stop=True, reason=reasons)
+            codes = "+".join(d.code for d in triggered if d.code)
+            return StopDecision(
+                stop=True, reason=reasons, code=codes or "composite_stop"
+            )
 
         return StopDecision(stop=False, reason="")
 

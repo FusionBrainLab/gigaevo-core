@@ -253,6 +253,9 @@ async def test_run_starts_and_cancels_the_sampler_task(
     # terminal drain, matching the production lifecycle contract.
     async def _dispatcher(_e):
         await asyncio.sleep(0.05)
+        from gigaevo.evolution.engine.stopper import StopDecision
+
+        return StopDecision(stop=False, reason="test dispatcher completed")
 
     async def _ingestor(active_engine):
         while active_engine._running:
@@ -283,3 +286,6 @@ async def test_run_starts_and_cancels_the_sampler_task(
     # The cancel path lands as either cancelled or a clean return.
     # Either way at least one sample fired during the sleeper window.
     assert captured, "expected sampler emissions during run()"
+    assert engine._write_snapshot.await_args_list[-1].kwargs["completion_reason"] == (
+        "dispatcher_completed"
+    )

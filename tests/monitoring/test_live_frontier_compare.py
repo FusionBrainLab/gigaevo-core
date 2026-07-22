@@ -131,6 +131,33 @@ class TestRenderFrontierPlot:
         assert out.exists()
         assert out.stat().st_size > 0
 
+    def test_mean_remains_visible_when_it_matches_frontier(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from gigaevo.monitoring import live_frontier_compare as mod
+
+        captured: list[dict] = []
+        original_plot = mod.plt.Axes.plot
+
+        def recording_plot(self, *args, **kwargs):
+            captured.append(kwargs.copy())
+            return original_plot(self, *args, **kwargs)
+
+        monkeypatch.setattr(mod.plt.Axes, "plot", recording_plot)
+        _render_frontier_plot(
+            output_dir=tmp_path,
+            metric="fitness",
+            frontier_history=[(0, 0.3), (1, 0.5)],
+            iter_mean_history=[(0, 0.3), (1, 0.5)],
+            higher_is_better=True,
+        )
+
+        mean_style = next(
+            style for style in captured if style.get("label") == "Per-item mean fitness"
+        )
+        assert mean_style["marker"] == "o"
+        assert mean_style["zorder"] > 3
+
     def test_no_file_when_frontier_empty(self, tmp_path) -> None:
         _render_frontier_plot(
             output_dir=tmp_path,

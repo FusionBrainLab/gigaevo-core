@@ -1,0 +1,40 @@
+# @package _global_
+
+# Fast-iteration mutation LLM: google/gemini-3-flash-preview via OpenRouter, high reasoning.
+# gemini-3-flash is lower-latency than gemini-3.5-flash — chosen for quick experiment
+# turnaround while keeping deep reasoning. No `service_tier: flex` (flex trades latency
+# for cost; here we want speed).
+#
+# Per the Gemini 3.x guidance (see gemini35_flash.yaml):
+#   - sampling params (temperature/top_p/top_k) are NOT recommended for Gemini 3.x and
+#     are omitted; reasoning is optimized for the default settings.
+#   - Gemini's native thinking_level is exposed through OpenRouter's unified
+#     `reasoning.effort` field (not the native name); pinned to `high` via extra_body.
+#   - structured_output_method=function_calling: Gemini's json_schema path 400s on large
+#     response schemas; function_calling is the reliable structured path.
+#   - gemini-3-flash does NOT report reasoning tokens in usage; the framework relies on
+#     tokens_out (always correct), so missing reasoning tokens are expected, not an error.
+#
+# Requires env var: OPENROUTER_API_KEY=<openrouter-api-key> (+ Squid proxy for egress).
+#
+# Usage:
+#   python run.py ... llm=gemini3_flash_high
+
+llm:
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  structured_output_method: function_calling
+  models:
+    - _target_: langchain_openai.ChatOpenAI
+      model: google/gemini-3-flash-preview
+      api_key: ${oc.env:OPENROUTER_API_KEY}
+      max_tokens: ${max_tokens}
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+      max_retries: 4
+      extra_body:
+        reasoning:
+          effort: high
+  probabilities: [1.0]
+  writer: ${ref:writer}
+  max_concurrent: ${llm_max_concurrent}

@@ -45,7 +45,11 @@ from gigaevo.evolution.engine.snapshot import (
     _reset_current_snapshot_for_tests,
 )
 from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
-from gigaevo.evolution.engine.stopper import MaxMutantsStopper
+from gigaevo.evolution.engine.stopper import (
+    CompositeStopper,
+    FitnessPlateauStopper,
+    MaxMutantsStopper,
+)
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -179,6 +183,34 @@ class TestSlotReleaseOnCancelInAcquireWindow:
 # ===========================================================================
 # Gap 2 — I6: dispatcher cancel drains all active mutant tasks
 # ===========================================================================
+
+
+class TestDispatcherTerminalDecision:
+    def test_reservation_saturation_is_not_a_terminal_stop(self):
+        engine = _make_engine(max_in_flight=2, loop_interval=0.001)
+        engine.config.stopper = MaxMutantsStopper(max_mutants=2)
+
+        assert engine._can_dispatch_mutant(reserved=2) is False
+        assert engine._terminal_stop_decision is None
+
+    async def test_preserves_stateful_composite_decision_without_re_evaluation(self):
+        engine = _make_engine(max_in_flight=1, loop_interval=0.001)
+        plateau = FitnessPlateauStopper(window=1, min_delta=0.01)
+        engine.config.stopper = CompositeStopper(
+            mode="any",
+            children=[MaxMutantsStopper(max_mutants=100), plateau],
+        )
+        engine._metrics_tracker.get_best_fitness.return_value = 0.5
+        engine._running = True
+
+        assert engine._can_dispatch_mutant(reserved=0) is True
+        assert engine._can_dispatch_mutant(reserved=0) is False
+        stagnant_count = plateau._stagnant_count
+
+        decision = await dispatcher_loop(engine)
+
+        assert decision.code == "fitness_plateau"
+        assert plateau._stagnant_count == stagnant_count
 
 
 class TestDispatcherCancelDrainsActive:
@@ -595,56 +627,37 @@ class TestSlotTransferredExclusive:
 
 
 # ===========================================================================
-# Bonus — F4: metrics_collector_task is awaited before storage.close()
+# Bonus — F4: metrics_collector_task is awaited while shared storage stays open
 # ===========================================================================
 
 
 class TestMetricsCollectorAwaitedOnStop:
-    """`stop()` must await the cancelled `_metrics_collector_task` before
-    closing storage. Without the await, the collector may still be in the
-    middle of `await storage.<call>` when `storage.close()` fires, raising
-    ConnectionClosedError into an orphan coroutine that has no caller."""
+    """Component stop drains its collectors but leaves shared storage ownership
+    to the run-level finalizer."""
 
-    async def test_collector_finished_before_storage_close(self):
+    async def test_collector_finished_without_closing_shared_storage(self):
         engine = _make_engine()
-
-        # Build a collector task that performs an await on storage. We
-        # observe whether it has finished (cancelled or not) by the time
-        # storage.close() is invoked.
         collector_finished = asyncio.Event()
-        storage_close_called = asyncio.Event()
-        order: list[str] = []
 
         async def collector():
             try:
-                # Long-lived poll loop, but the cancel must reach us.
                 while True:
                     await asyncio.sleep(0.001)
             except asyncio.CancelledError:
-                order.append("collector-cancelled")
                 collector_finished.set()
                 raise
 
-        async def fake_close():
-            order.append("storage-close")
-            storage_close_called.set()
-
-        engine.storage.close = AsyncMock(side_effect=fake_close)
+        engine.storage.close = AsyncMock()
         engine._metrics_tracker.stop = AsyncMock()
 
-        engine._task = None  # so the early-return branch is taken
+        engine._task = None
         engine._metrics_collector_task = asyncio.create_task(collector())
-        # Let collector be scheduled.
         await asyncio.sleep(0)
 
         await asyncio.wait_for(engine.stop(), timeout=INV_TEST_TIMEOUT)
 
         assert collector_finished.is_set(), "collector did not see CancelledError"
-        assert storage_close_called.is_set(), "storage.close() did not fire"
-        # The collector's finally ran BEFORE storage.close was called.
-        assert order.index("collector-cancelled") < order.index("storage-close"), (
-            f"order violation: {order} — storage closed before collector finished"
-        )
+        engine.storage.close.assert_not_awaited()
 
     async def test_wedged_collector_does_not_block_stop_forever(self):
         """If the collector somehow ignores cancel (e.g. holds a sync

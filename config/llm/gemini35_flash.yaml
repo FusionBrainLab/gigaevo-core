@@ -29,6 +29,9 @@
 llm:
   _target_: gigaevo.llm.models.MultiModelRouter
   _convert_: all
+  # Gemini's json_schema structured path 400s on large response schemas (e.g. the
+  # stacked dag_tab diff union at max_nodes>=8); function_calling is the reliable path.
+  structured_output_method: function_calling
   models:
     - _target_: langchain_openai.ChatOpenAI
       model: google/gemini-3.5-flash

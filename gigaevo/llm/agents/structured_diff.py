@@ -84,14 +84,13 @@ class DiffMutationAgent(LangGraphAgent):
         return state
 
     async def acall_llm(self, state: DiffMutationState) -> DiffMutationState:
-        # json_schema is the only structured-output transport the vLLM proxy serves
-        # (function_calling 400s without --tool-call-parser; probed 2026-07-02).
-        # The {"name","schema"} form skips LangChain's convert_to_openai_function,
-        # which KeyErrors on union-root schemas (no top-level "properties").
+        # Delegate transport selection to the router. The internal vLLM preset uses
+        # auto/json_schema, while Gemini requires function_calling once a parent-aware
+        # diff schema contains keep|new unions. Pinning json_schema here made every
+        # non-seed dag_tab mutation fail with provider INVALID_ARGUMENT.
         schema = state["diff_schema"].json_schema
         structured = self._llm.with_structured_output(
-            {"name": str(schema.get("title", "structured_diff")), "schema": schema},
-            method="json_schema",
+            {"name": str(schema.get("title", "structured_diff")), "schema": schema}
         )
         t0 = time.monotonic()
         error_type: str | None = None

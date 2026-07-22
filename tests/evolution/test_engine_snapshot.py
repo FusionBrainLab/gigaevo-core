@@ -101,6 +101,13 @@ async def test_write_snapshot_persists_to_redis(engine_with_storage, fakeredis_s
 
 
 @pytest.mark.asyncio
+async def test_write_snapshot_persists_completion_reason(engine_with_storage):
+    await engine_with_storage._write_snapshot(completion_reason="max_mutants_reached")
+
+    assert engine_with_storage._snapshot.completion_reason == "max_mutants_reached"
+
+
+@pytest.mark.asyncio
 async def test_write_snapshot_with_no_updates_still_bumps_version(engine_with_storage):
     """Heartbeat behavior: empty _write_snapshot() bumps version only."""
     await engine_with_storage._write_snapshot()

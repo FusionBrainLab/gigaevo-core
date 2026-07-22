@@ -17,8 +17,13 @@ llm:
       model: google/gemini-3-flash-preview
       api_key: ${oc.env:OPENAI_API_KEY}
       temperature: ${temperature}
-      max_tokens: ${max_tokens}
+      # The cap covers reasoning plus the answer. A full twelve-node dag_tab rewrite alone
+      # carries 6000 code chars plus a 500-char rationale per node (about 19500 tokens),
+      # so the 32768-token cap leaves room for the largest legal diff and reasoning.
+      max_tokens: 32768
       base_url: https://openrouter.ai/api/v1
       request_timeout: ${request_timeout}
+      max_retries: 4
   probabilities: [1.0]
   writer: ${ref:writer}
+  max_concurrent: ${llm_max_concurrent}

@@ -47,9 +47,11 @@ class _FakeModel:
         self._supported = set(supported)
         self._parsed = parsed
         self.method_attempts: list[str | None] = []
+        self.schemas_seen: list[object] = []
 
-    def with_structured_output(self, _schema, include_raw=False, method=None, **_kw):
+    def with_structured_output(self, schema, include_raw=False, method=None, **_kw):
         self.method_attempts.append(method)
+        self.schemas_seen.append(schema)
         return _Bound(self, method)
 
     def _respond(self, method: str | None):
@@ -110,6 +112,35 @@ def test_pinned_method_skips_negotiation():
     )
     assert isinstance(out, _Parsed)
     assert model.method_attempts == ["function_calling"]
+
+
+def test_function_calling_preserves_wrapped_json_schema_as_parameters():
+    model = _FakeModel("m", {"function_calling"}, _Parsed())
+    json_schema = {
+        "title": "dag_tab_feature_graph_diff",
+        "type": "object",
+        "properties": {"base_parent": {"type": "string"}},
+        "required": ["base_parent"],
+    }
+    wrapped = {"name": "dag_tab_feature_graph_diff", "schema": json_schema}
+
+    _router(model, "function_calling").with_structured_output(wrapped).invoke(_MSG)
+
+    assert model.schemas_seen == [
+        {"name": "dag_tab_feature_graph_diff", "parameters": json_schema}
+    ]
+
+
+def test_json_schema_preserves_named_schema_wrapper():
+    model = _FakeModel("m", {"json_schema"}, _Parsed())
+    wrapped = {
+        "name": "dag_tab_feature_graph_diff",
+        "schema": {"title": "dag_tab_feature_graph_diff", "type": "object"},
+    }
+
+    _router(model, "json_schema").with_structured_output(wrapped).invoke(_MSG)
+
+    assert model.schemas_seen == [wrapped]
 
 
 def test_none_forwards_langchain_default():

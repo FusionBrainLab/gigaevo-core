@@ -15,6 +15,7 @@ post_step_hook: null
 # Override per run: post_step_hook_timeout_s=<seconds>.
 post_step_hook_timeout_s: 300.0
 max_in_flight: 8
+max_consecutive_mutation_failures: 32
 # Bounded drain budget (seconds) after the mutant cap is reached: drain in-flight
 # evals up to this budget so fast ones still land, then abandon stragglers for
 # teardown to SIGKILL and finalize the run cleanly. null restores the legacy

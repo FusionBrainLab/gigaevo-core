@@ -52,6 +52,7 @@ class TestMaxMutantsStopper:
         result = stopper.should_stop(_ctx(total_mutants=10))
         assert result.stop is True
         assert "10" in result.reason
+        assert result.code == "max_mutants_reached"
 
     def test_stops_past_cap(self) -> None:
         stopper = MaxMutantsStopper(max_mutants=10)
