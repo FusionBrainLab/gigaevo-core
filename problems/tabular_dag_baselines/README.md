@@ -21,6 +21,9 @@ The implementations are grouped as follows:
 
 The `catboost` preset resolves directly to the control implementation in
 [`problems/dag_tab`](../dag_tab); no duplicate CatBoost problem directory exists.
+All seven presets default to the true no-memory control:
+`pipeline=guided memory=none`. Estimator choice and memory policy are
+independent.
 
 ## Environment
 
@@ -93,26 +96,32 @@ The preset supplies all FeatureGraph plumbing: problem path, JSON
 program format, dynamic raw-feature seed, dataset-aware task context, and the
 canonical structured-diff mutation operator. The seven small model presets all
 inherit that one shared configuration; there is no config file per dataset.
+The bare commands above use no memory reader, writer, or memory LLM.
 Each problem prompt also names and explains its fixed estimator before the
 shared FeatureGraph ABI. These descriptions are factual only: they contain no
 estimator-specific feature advice and no validation, refit, or test mechanics.
 The shared ABI and selected dataset context otherwise remain the same across
 models.
 
-For the standard 100-mutation campaign used in the current tabular experiments,
-add the common experiment choices:
+For a Memory V2 treatment matching the completed California campaign, select
+both the reading pipeline and memory recipe explicitly:
 
 ```bash
 python run.py \
   experiment=tabular_dag/realmlp \
   llm=gemini35_flash \
+  pipeline=memory_guided \
+  memory=v2 \
   memory/llm=qwen_instruct \
   algorithm=tabular/2d_local_ood \
   mutation_operator.allowed_changes.max_nodes=10 \
   max_mutants=100
 ```
 
-Replace only `realmlp` with another preset from the table. No
+Replace only `realmlp` with another estimator preset. Other compatible memory
+recipes, such as `memory=v2_multitask`, can be selected the same way. A
+no-memory campaign omits the three memory-treatment overrides because
+`pipeline=guided memory=none` is already the tabular default. No
 `max_in_flight=4` override is required; independent evaluations can use all
 available GPUs through the shared allocator.
 

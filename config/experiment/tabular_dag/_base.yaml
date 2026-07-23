@@ -1,10 +1,13 @@
 # @package _global_
 
-# Extend the normal experiment stack, then replace only the representation,
-# loader, mutation operator, and problem used by estimator-controlled
-# FeatureGraph experiments.
+# Extend the normal experiment stack, select the no-memory control policy, then
+# replace the representation, loader, and mutation operator used by
+# estimator-controlled FeatureGraph experiments. Memory treatments remain
+# explicit command-line choices.
 defaults:
   - /experiment/base
+  - override /pipeline: guided
+  - override /memory: none
   - override /program_format: json_document
   - override /loader: dag_tab_seed
   - override /mutation: structured_diff_dag_tab

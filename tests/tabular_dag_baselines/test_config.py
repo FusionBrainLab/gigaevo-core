@@ -4,6 +4,8 @@ from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 import pytest
 
+from gigaevo.config.validation import validate_memory_pipeline_compat
+
 CONFIG_DIR = Path(__file__).parents[2] / "config"
 MODELS = (
     "catboost",
@@ -33,6 +35,11 @@ def test_tabular_dag_experiment_presets(model):
     assert cfg.loader.pattern == "*.json"
     assert cfg.program_loader._target_.endswith("DagTabSeedLoader")
     assert cfg.problem_context._target_.endswith("DagTabProblemContext")
+    assert cfg.pipeline.id == "guided"
+    assert cfg.pipeline.reads_external_memory is False
+    assert cfg.memory.capabilities.read is False
+    assert cfg.memory.capabilities.write is False
+    validate_memory_pipeline_compat(cfg)
     assert cfg.mutation_operator.allowed_changes._target_.endswith(
         "AllowedDagTabChanges"
     )
@@ -90,6 +97,27 @@ def test_dataset_and_node_budget_remain_short_overrides():
 
     assert cfg.problem.dataset == "adult"
     assert cfg.mutation_operator.allowed_changes.max_nodes == 10
+
+
+def test_memory_policy_is_an_explicit_orthogonal_override():
+    with initialize_config_dir(config_dir=str(CONFIG_DIR), version_base=None):
+        cfg = compose(
+            config_name="config",
+            overrides=[
+                "experiment=tabular_dag/tabpfn",
+                "pipeline=memory_guided",
+                "memory=v2_multitask",
+                "memory/llm=qwen_instruct",
+            ],
+        )
+
+    assert cfg.problem.name == "tabular_dag_baselines/tabpfn"
+    assert cfg.pipeline.id == "memory_guided"
+    assert cfg.pipeline.reads_external_memory is True
+    assert cfg.memory.capabilities.read is True
+    assert cfg.memory.capabilities.write is True
+    assert cfg.memory.llm.models[0].model == "Qwen/Qwen3-235B-A22B-Instruct-2507"
+    validate_memory_pipeline_compat(cfg)
 
 
 def test_baselines_are_scoped_under_experiment_configs():
