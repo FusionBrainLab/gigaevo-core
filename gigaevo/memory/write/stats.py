@@ -47,9 +47,9 @@ from gigaevo.memory.cards import (
 from gigaevo.memory.context.evidence import clean_ids, median, oriented_delta
 from gigaevo.memory.context.no_card import NoCardEvidenceRecorder
 from gigaevo.memory.events import MemoryGainRestamp, emit_memory_event
-from gigaevo.memory.outcomes import outcome_uncertainty
 from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.memory.storage.base import MemoryStore
+from gigaevo.memory.uncertainty import outcome_uncertainty
 from gigaevo.memory.write.admission import CardAdmissionGate
 from gigaevo.memory.write.crediting import EffectEstimator, PointEffectEstimator
 from gigaevo.programs.metrics.context import MetricsContext

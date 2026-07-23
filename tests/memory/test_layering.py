@@ -4,9 +4,11 @@ Layer order: ``cards < {events | prior_evidence} < {context | storage} <
 selection_leases < {read | write} < provider``. ``prior_evidence`` (evicted-card
 evidence persistence) is a ``cards``-only leaf consumed by ``read`` and ``write``.
 ``ope`` (off-policy evaluation reporter) is an ``events``-only leaf consumed by
-``write`` (the writer refreshes it after each increment). ``outcomes`` (terminal-
-outcome producer) is a ``{cards | events}`` leaf consumed by the evolution engine,
-not by any memory layer.
+``write`` (the writer refreshes it after each increment). ``uncertainty`` is a
+dependency-free outcome-measurement leaf consumed by ``outcomes`` and ``write``.
+``outcomes`` (terminal-outcome producer) is a
+``{cards | events | uncertainty}`` leaf consumed by the evolution engine, not by
+any higher memory layer.
 ``read/`` and ``write/`` never import each other (the write-side eviction surface —
 the ``Evictor`` Protocol + ``NullEvictor`` — is self-contained in ``write/``).
 Chroma is confined to ``storage/index.py``; LLM handles (routers,
@@ -29,7 +31,8 @@ LAYER_ALLOWED = {
     "events": frozenset({"cards"}),
     "prior_evidence": frozenset({"cards"}),
     "ope": frozenset({"events", "ope"}),
-    "outcomes": frozenset({"cards", "events"}),
+    "uncertainty": frozenset(),
+    "outcomes": frozenset({"cards", "events", "uncertainty"}),
     "context": frozenset({"cards", "context"}),
     "storage": frozenset({"cards", "events", "storage"}),
     "selection_leases": frozenset({"cards", "storage", "selection_leases"}),
@@ -45,6 +48,7 @@ LAYER_ALLOWED = {
             "prior_evidence",
             "selection_leases",
             "storage",
+            "uncertainty",
             "write",
         }
     ),
