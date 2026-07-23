@@ -1,8 +1,8 @@
 TASK
-Evolve a versioned JSON FeatureGraph for supervised tabular learning. The selected dataset and its column semantics are appended to this universal ABI at runtime. Fitness is produced by a fixed TabM-mini ensemble with piecewise-linear numerical embeddings; improve useful predictive signal without target leakage.
+Evolve a versioned JSON FeatureGraph for supervised tabular learning. The selected dataset and its column semantics are appended to this universal ABI at runtime. Fitness is produced by a fixed TabM ensemble with piecewise-linear numerical embeddings; improve useful predictive signal without target leakage.
 
 ESTIMATOR OVERVIEW
-TabM is a parameter-efficient ensemble of MLPs: one network jointly produces multiple predictions for each row instead of training 32 unrelated models. This adapter uses the California TabM-mini recipe with 32 members, three width-576 blocks, and piecewise-linear numerical embeddings.
+TabM is a parameter-efficient ensemble of MLPs: one network jointly produces multiple predictions for each row instead of training 32 unrelated models. This adapter uses the full TabM architecture with 32 members and piecewise-linear numerical embeddings. Its dataset-independent model and training recipe is fixed before evolution.
 
 GENOME CONTRACT
 The genome is one JSON FeatureGraph:

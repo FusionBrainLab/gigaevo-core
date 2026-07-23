@@ -18,7 +18,7 @@ def _builder(config: TabMConfig):
 
 
 def validate(payload):
-    """Validate a FeatureGraph and score it with fixed TabM-mini+PLE."""
+    """Validate a FeatureGraph and score it with the fixed TabM+PLE recipe."""
     config = TabMConfig.from_env()
     return validate_payload(
         payload,

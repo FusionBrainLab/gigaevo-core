@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -29,6 +31,27 @@ def _model(monkeypatch, *, config=None):
     )
     graph = FeatureGraph(dataset="california", raw_columns=["x0", "x1"], nodes=[])
     return TabMFeatureGraphModel(graph, device="cpu", config=config)
+
+
+def test_default_recipe_matches_official_tabm_example(monkeypatch):
+    for name in tuple(os.environ):
+        if name.startswith("GIGAEVO_TABM_"):
+            monkeypatch.delenv(name)
+
+    config = TabMConfig.from_env()
+
+    assert config.arch_type == "tabm"
+    assert config.k == 32
+    assert config.n_blocks == 2
+    assert config.d_block == 512
+    assert config.dropout == 0.1
+    assert config.learning_rate == 0.002
+    assert config.weight_decay == 0.0003
+    assert config.n_bins == 48
+    assert config.d_embedding == 16
+    assert config.batch_size == 256
+    assert config.gradient_clipping_norm == 1.0
+    assert config.share_training_batches is True
 
 
 def test_feature_preprocessing_is_fit_local_and_has_unknown_category(monkeypatch):
