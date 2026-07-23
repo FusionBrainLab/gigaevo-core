@@ -2,10 +2,11 @@
 
 The hook is a thin orchestration shell over three collaborators, mirroring the
 reader's modular pipeline: a :class:`ProgramRecordExtractor` (eligible records +
-dedup bookkeeping), a :class:`LibrarianWriteStack` (the shared store + a lazy
-gate/librarian + task summary), a :class:`CardStatsUpdater` (gain attribution +
-restamp + configured eviction).
-There is no enable flag — when the writer is off the config wires
+dedup bookkeeping), a :class:`LibrarianWriteStack` (the shared store + an eager
+gate + lazy librarian/task summary), a :class:`CardStatsUpdater` (gain
+attribution + restamp + configured eviction).
+``authoring_enabled`` can freeze bank membership while keeping evidence
+maintenance active. When the whole writer hook is off, config wires
 ``NullPostRunHook`` instead.
 """
 
@@ -84,11 +85,13 @@ class LibrarianWriteStack:
 
     A thin holder over the one ``MemoryStore`` the whole run shares (injected —
     the reader reads the same instance, so a write is visible to the next read
-    with no cross-view reconciliation). It builds the admission gate and
-    librarian once, off the event loop, on first use. It also condenses the task
-    description into the one-line summary stamped on every card — folded into
-    :meth:`ensure` so there is no summary-before-stack ordering rule for the
-    orchestrator to honour.
+    with no cross-view reconciliation). It builds the admission gate eagerly,
+    then builds the librarian once, off the event loop,
+    on first authoring use. It also condenses the task description into the
+    one-line summary stamped on every card — folded into :meth:`ensure` so there
+    is no summary-before-stack ordering rule for the orchestrator to honour.
+    Evidence-only refreshes can therefore use the gate without constructing any
+    authoring agents.
     """
 
     def __init__(
@@ -111,9 +114,7 @@ class LibrarianWriteStack:
         evicted_evidence: EvictedEvidenceSink | None = None,
     ) -> None:
         self._llm = llm
-        self._evictor = evictor
         self._store = store
-        self._checkpoint_dir = Path(checkpoint_dir)
         self._task_key = task_key
         self._task_description = task_description
         self._metrics_description = metrics_description
@@ -121,11 +122,16 @@ class LibrarianWriteStack:
         self._dedup_policy = dedup_policy if dedup_policy is not None else DedupPolicy()
         self._prompts_dir = prompts_dir
         self._novelty_admission_gate = novelty_admission_gate
-        self._selection_leases = selection_leases
-        self._min_effective_events = min_effective_events
-        self._max_task_cards = max_task_cards
-        self._evicted_evidence = evicted_evidence
-        self._gate: CardAdmissionGate | None = None
+        self._gate = CardAdmissionGate(
+            store=store,
+            evictor=evictor,
+            ledger=WriteLedger(Path(checkpoint_dir) / "write_ledger.jsonl"),
+            selection_leases=selection_leases,
+            task_key=task_key,
+            min_effective_events=min_effective_events,
+            max_task_cards=max_task_cards,
+            evicted_evidence_sink=evicted_evidence,
+        )
         self._librarian: Librarian | None = None
         # genuine LLM-condensed one-liner, produced once per run; None until then
         # so the call is memoised.
@@ -137,15 +143,10 @@ class LibrarianWriteStack:
         return self._store
 
     @property
-    def gate(self) -> CardAdmissionGate | None:
+    def gate(self) -> CardAdmissionGate:
         return self._gate
 
     def require_gate(self) -> CardAdmissionGate:
-        if self._gate is None:
-            raise RuntimeError(
-                "LibrarianWriteStack.require_gate() called before ensure(); "
-                "await the build before writing."
-            )
         return self._gate
 
     @property
@@ -165,7 +166,7 @@ class LibrarianWriteStack:
         return self._summary or ""
 
     async def ensure(self) -> None:
-        """Build the gate and librarian once.
+        """Build the librarian once.
 
         The build loads the embedding model (seconds of blocking I/O) so it
         runs off the event loop; the lock collapses a concurrent first-write race
@@ -210,16 +211,7 @@ class LibrarianWriteStack:
     def _build(self, summary: str) -> None:
         policy = self._dedup_policy
         store = self._store
-        gate = CardAdmissionGate(
-            store=store,
-            evictor=self._evictor,
-            ledger=WriteLedger(self._checkpoint_dir / "write_ledger.jsonl"),
-            selection_leases=self._selection_leases,
-            task_key=self._task_key,
-            min_effective_events=self._min_effective_events,
-            max_task_cards=self._max_task_cards,
-            evicted_evidence_sink=self._evicted_evidence,
-        )
+        gate = self.require_gate()
         # Optional novelty-admission judge: gates freshly-authored idea cards on
         # novelty against the mutator's prior. Off unless the arm turns it on
         # (the extra LLM hop per authored card is not free).
@@ -258,15 +250,15 @@ class LibrarianWriteStack:
             task_description_summary=summary,
             admission_judge=admission_judge,
         )
-        self._gate = gate
         self._librarian = librarian
 
 
 class MemoryWriter(IncrementalPostRunHook):
-    """PostRunHook that authors memory cards from a completed evolutionary run
-    via the librarian write path: each eligible mutation diff may produce one
-    idea card, each top-fitness exemplar may produce a program card, and one
-    configured eviction sweep runs per increment.
+    """PostRunHook that maintains memory from a completed evolutionary run.
+
+    With authoring enabled, each eligible mutation diff may produce one idea
+    card and each top-fitness exemplar may produce a program card. Every mode
+    runs evidence synchronization and the configured retirement sweep.
 
     Instantiated by Hydra; the config declares the evictor and llm once and
     shares them by reference.
@@ -302,6 +294,9 @@ class MemoryWriter(IncrementalPostRunHook):
             would already reach for unprompted (the bank's binding constraint is
             an excess of prior-known cards). Off by default; the extra hop per
             authored card is not free, and it fails open on any judge error.
+        authoring_enabled: When false, skip all insight and program-card
+            authoring while retaining evidence synchronization, selection-lease
+            release, existing-card stamps, and configured retirement.
     """
 
     def __init__(
@@ -332,6 +327,7 @@ class MemoryWriter(IncrementalPostRunHook):
         evicted_evidence: EvictedEvidenceSink | None = None,
         ope_reporter: MemoryOpeReporter | None = None,
         require_archive_or_positive_gain: bool = False,
+        authoring_enabled: bool = True,
     ) -> None:
         # Default to the task's primary metric, not a literal "fitness": on a
         # task whose primary key differs, a hardcoded key would resolve to no
@@ -351,6 +347,7 @@ class MemoryWriter(IncrementalPostRunHook):
         self._higher_is_better = metrics_context.is_higher_better(fitness_key)
         self._task_key = task_key
         self._task_description = task_description
+        self._authoring_enabled = authoring_enabled
         metrics_description = MetricsFormatter(
             metrics_context
         ).format_metrics_description()
@@ -426,8 +423,7 @@ class MemoryWriter(IncrementalPostRunHook):
         *,
         posterior_programs: list[Program] | None = None,
     ) -> None:
-        """Full pipeline: filter eligible records → author one hypothesis per diff →
-        cards → author exemplar cards → update causal evidence → sweep retirement.
+        """Refresh evidence, optionally author cards, and sweep retirement.
 
         ``programs`` feeds the expensive librarian agents and may be a bounded
         window (the live hook caps it to keep each sweep inside the engine's
@@ -453,6 +449,11 @@ class MemoryWriter(IncrementalPostRunHook):
         *,
         posterior_programs: list[Program] | None,
     ) -> None:
+        pool = programs if posterior_programs is None else posterior_programs
+        if not self._authoring_enabled:
+            await self._update_stats(pool)
+            return
+
         await self._stack.ensure()
         summary = self._stack.task_description_summary
         records = self._extractor.extract(
@@ -525,9 +526,10 @@ class MemoryWriter(IncrementalPostRunHook):
             else:
                 self._idea_failures.pop(rec.id, None)
 
-        pool = programs if posterior_programs is None else posterior_programs
         await self._author_exemplars(pool)
+        await self._update_stats(pool)
 
+    async def _update_stats(self, pool: list[Program]) -> None:
         # re-stamping (per-card store writes) and eviction are blocking
         # I/O; keep them off the event loop so in-flight mutations don't stall
         await _shielded_to_thread(

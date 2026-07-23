@@ -48,7 +48,7 @@ persisted data raises instead of being coerced.
 | `read/interfaces.py` | Shared read-side Protocols: `Shortlister`, `PolicyDigestProvider` + the `policy_digest` fallback |
 | `read/shortlist.py` | `ResearchShortlister`: mutation-grounded query → `store.research()`; passes a digest of the newest banked cards (one description line each) as the planner's context |
 | `read/exclusion.py` | `CardExcluder` Protocol, `NullExcluder`, `LineageExcluder` (filter-first lineage gate) |
-| `write/writer.py` | `MemoryWriter` (`IncrementalPostRunHook`): extract outcomes → author at most one hypothesis per mutation → author bounded program strategy exemplars → update causal evidence → periodic retirement sweep, one lock |
+| `write/writer.py` | `MemoryWriter` (`IncrementalPostRunHook`): optionally extract/author hypotheses and bounded program exemplars → always update causal evidence and run configured retirement, one lock; `authoring_enabled=false` keeps only maintenance |
 | `write/crediting.py` | `EffectEstimator` seam: one `InjectionOutcome` → a `Measurement` (base-relative gain attribution) |
 | `write/librarian.py` | One write protocol for both card kinds: author one candidate without bank context → retrieve same-kind neighbors in task or whole-bank scope → strict insight identity or program strategy-family `NEW` / `EQUIVALENT` judgment; equivalence preserves the existing treatment text and pools task-labelled evidence |
 | `gigaevo/llm/agents/admission_novelty.py` (outside this package) | `NoveltyAdmissionAgent`: keep/reject an idea card on novelty vs the mutator's prior (`writer.novelty_admission_gate`, off by default pending its A/B) |
@@ -62,7 +62,7 @@ persisted data raises instead of being coerced.
 
 ## Assembly — YAML `${ref:}` graph, no assembler
 
-There is no `MemorySystem`, no factory glue, no enable flags. Each
+There is no `MemorySystem` or factory glue. Each
 `config/memory/{none,v2}.yaml` arm declares the same component graph and swaps
 `_target_`s (Null variants for the disabled read/write side); components are
 declared once and shared by reference:
@@ -73,6 +73,15 @@ declared once and shared by reference:
   resolve to `${ref:memory.writer}`)
 - live writer mode also installs `LiveMemoryRefreshHook` as the global
   `post_step_hook`
+
+For a fixed shared card set with causal feedback, retain that live hook and set
+`memory.writer.authoring_enabled=false`. The writer then bypasses all librarian
+and exemplar work but still synchronizes causal evidence and selection leases.
+With `memory=v2_multitask`, compact `use_trials` are atomically folded into
+existing cards and `memory/evictor=none` prevents membership changes. This is
+not a filesystem-read-only mode: the bank and lease registry remain writable.
+`memory/write=none` instead removes all writer maintenance, including those
+stamps and completed-child lease releases.
 
 See [`docs/memory.md`](../../docs/memory.md) for the arm matrix, component
 groups, and launch recipes.

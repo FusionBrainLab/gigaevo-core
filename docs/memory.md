@@ -5,6 +5,8 @@ The supported memory modes are:
 - `memory=none`: no external-memory read or write path.
 - `memory=v2`: live card authoring plus randomized, contextual Bayesian
   selection and causal retirement.
+- `memory=v2_multitask` with `memory.writer.authoring_enabled=false`: a fixed
+  shared card set with live causal-trial stamps and no new card authoring.
 
 `memory=v2` is the production design. It does not use the removed v1
 reputation/auction/reconcile/consolidation stack.
@@ -256,6 +258,33 @@ The canonical graph is `config/memory/v2.yaml`. Important component groups:
 | `memory/evictor` | `causal`, `none` | causal retirement or explicit ablation |
 | `memory/no_card_evidence` | `none` | explicit absence of heuristic no-card evidence |
 | `memory/write` | `live`, `end_of_run`, `none` | writer cadence |
+
+### Fixed shared card set
+
+Use the multitask preset when runs should learn from one populated bank without
+adding cards:
+
+```bash
+python run.py problem.name=<task> \
+  pipeline=memory_guided \
+  memory=v2_multitask \
+  memory_bank_dir=/absolute/path/to/shared_memory_bank \
+  memory.writer.authoring_enabled=false
+```
+
+This keeps `memory/write=live`: decisions and terminals continue updating each
+run's local posterior, completed selection leases are released, and compact
+randomized `use_trials` are deduplicated onto existing shared cards. The writer
+does not build the task-summary, card-author, equivalence, or program-exemplar
+agents. `v2_multitask` already selects `memory/evictor=none`, so the card ID set
+and treatment prose remain fixed.
+
+The mode is not filesystem read-only. `cards.json` must remain writable for
+trial stamps, and `selection_leases.json` must remain writable for in-flight
+coordination. Do not use `memory/write=none` for this workflow: that removes
+the updater as well as authoring, so shared trials are not stamped and
+completed-child leases are not promptly released. Keep `checkpoint_dir`
+run-specific and share only `memory_bank_dir`.
 
 The resolver-safe causal evictor couples its viability probability to
 `SafetyConstraint.alpha` through `${ref:memory.safety::alpha}`. A production

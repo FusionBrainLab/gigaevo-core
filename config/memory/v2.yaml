@@ -221,6 +221,10 @@ causal_writer_updater:
 
 writer:
   _target_: gigaevo.memory.write.writer.MemoryWriter
+  # Evidence-only runs keep the live/final writer hooks but skip every path
+  # that authors a new insight or program card. Existing-card stamps, causal
+  # ledger synchronization, and selection-lease release still run.
+  authoring_enabled: true
   llm: ${ref:memory.llm}
   evictor: ${ref:memory.evictor}
   store: ${ref:memory.store}

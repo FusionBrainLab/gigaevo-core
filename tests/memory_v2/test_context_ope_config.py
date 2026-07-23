@@ -586,6 +586,7 @@ def test_memory_v2_multitask_is_one_preset_plus_a_bank_path(tmp_path) -> None:
         assert cfg.memory.candidate_source.allow_cross_task is True
         assert isinstance(instantiate(cfg.memory.evictor), NullEvictor)
         assert cfg.memory.causal_writer_updater.record_use_trials is True
+        assert cfg.memory.writer.authoring_enabled is True
         assert cfg.memory.writer.dedup_policy.across_tasks is True
         assert cfg.memory.store.config.path == str(tmp_path)
         assert cfg.selection_leases.path == f"{tmp_path}/selection_leases.json"
@@ -597,6 +598,32 @@ def test_memory_v2_multitask_is_one_preset_plus_a_bank_path(tmp_path) -> None:
             cfg.memory.provider.cross_task_usefulness,
             CrossTaskUsefulnessConfig,
         )
+    finally:
+        GlobalHydra.instance().clear()
+
+
+def test_memory_v2_multitask_can_stamp_without_authoring(tmp_path) -> None:
+    config_dir = Path(__file__).parents[2] / "config"
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    "problem.name=heilbron",
+                    "memory=v2_multitask",
+                    f"memory_bank_dir={tmp_path}",
+                    "memory.writer.authoring_enabled=false",
+                ],
+            )
+        validate_memory_v2_scope(cfg)
+        assert cfg.memory.write.mode == "live"
+        assert cfg.memory.writer.authoring_enabled is False
+        assert cfg.memory.causal_writer_updater.record_use_trials is True
+        assert isinstance(instantiate(cfg.memory.evictor), NullEvictor)
+        raw_hook = OmegaConf.to_container(cfg.post_step_hook, resolve=False)
+        assert isinstance(raw_hook, dict)
+        assert raw_hook["tracker"] == "${ref:memory.writer}"
     finally:
         GlobalHydra.instance().clear()
 

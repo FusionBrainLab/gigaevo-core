@@ -13,7 +13,7 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
     MUTATION_OUTPUT_METADATA_KEY,
 )
-from gigaevo.memory.cards import Card, CardKind
+from gigaevo.memory.cards import Card, CardKind, CardUseTrial
 from gigaevo.memory.write.admission import (
     CardAdmissionGate,
     WriteOutcome,
@@ -223,6 +223,62 @@ async def test_run_increment_ingests_and_authors_exemplars(
 
     await writer.run_increment([parent, child])
     assert len(librarian.ingest_calls) == 1
+
+
+async def test_authoring_disabled_only_stamps_existing_cards(
+    store, make_card, make_program, metrics_context, tmp_path
+):
+    trial = CardUseTrial(
+        decision_id="decision-1",
+        run_id="run-1",
+        task_key="shared-task",
+        treatment=True,
+        success=True,
+    )
+    existing = make_card(id="shared-card")
+    store.save(existing)
+    parent = make_program(parents=[])
+    child = make_program(
+        fitness=0.7,
+        parents=[parent.id],
+        metadata={
+            MUTATION_OUTPUT_METADATA_KEY: {
+                "changes": [{"description": "would normally author", "explanation": ""}]
+            }
+        },
+    )
+    update_calls: list[tuple[str, ...]] = []
+
+    class ExistingCardStamper:
+        def update(self, pool, *, store, gate) -> None:
+            assert isinstance(gate, CardAdmissionGate)
+            update_calls.append(tuple(program.id for program in pool))
+            store.update(
+                existing.id,
+                lambda fresh: fresh.model_copy(update={"use_trials": (trial,)}),
+            )
+
+    writer = MemoryWriter(
+        llm=object(),
+        evictor=NullEvictor(),
+        store=store,
+        checkpoint_dir=tmp_path,
+        metrics_context=metrics_context,
+        task_description="task",
+        best_programs_percent=100.0,
+        stats_updater=ExistingCardStamper(),
+        authoring_enabled=False,
+    )
+
+    await writer.run_increment([child], posterior_programs=[parent, child])
+
+    assert update_calls == [(parent.id, child.id)]
+    assert [card.id for card in store.snapshot()] == [existing.id]
+    assert store.get(existing.id).use_trials == (trial,)
+    assert store.get(existing.id).description == existing.description
+    assert writer._stack.librarian is None
+    assert writer._stack.task_description_summary == ""
+    assert writer._extractor.seen_ids == set()
 
 
 async def test_writer_stamps_task_key_on_founding_event_and_program_exemplar(

@@ -63,7 +63,9 @@ class LiveMemoryRefreshHook:
                 "LiveMemoryRefreshHook needs an IncrementalPostRunHook (got "
                 f"{type(tracker).__name__}); memory/write=live needs a "
                 "writer-enabled memory preset such as memory=v2 (read+write). "
-                "For read-only memory, use memory/write=none."
+                "Use memory/write=none to disable all writer maintenance, or "
+                "memory.writer.authoring_enabled=false to keep evidence-only "
+                "maintenance without creating cards."
             )
         self._tracker = tracker
         self._storage = storage

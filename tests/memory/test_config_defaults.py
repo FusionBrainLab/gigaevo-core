@@ -31,6 +31,11 @@ def test_memory_writer_task_key_defaults_to_empty():
     assert parameters["task_key"].default == ""
 
 
+def test_memory_writer_authors_new_cards_by_default():
+    parameters = inspect.signature(MemoryWriter.__init__).parameters
+    assert parameters["authoring_enabled"].default is True
+
+
 def test_composed_config_instantiates_shared_selection_registry(tmp_path):
     GlobalHydra.instance().clear()
     with initialize_config_dir(

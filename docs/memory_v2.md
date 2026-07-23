@@ -58,6 +58,24 @@ python run.py problem.name=<task> \
   memory_bank_dir=$PWD/SHARED_MEMORY_BANK
 ```
 
+To keep that shared card set fixed while still learning from it:
+
+```bash
+python run.py problem.name=<task> \
+  memory=v2_multitask \
+  memory_bank_dir=$PWD/SHARED_MEMORY_BANK \
+  memory.writer.authoring_enabled=false
+```
+
+This keeps the live writer hook only for evidence maintenance: existing cards
+receive deduplicated compact trials and completed selection leases are released,
+but no insight or program cards are authored and no author/equivalence LLM calls
+run. The multitask preset already disables retirement, so card IDs and treatment
+text remain fixed. The bank is therefore authoring-disabled, not
+filesystem-read-only; `cards.json` and `selection_leases.json` must still be
+writable. `memory/write=none` is not equivalent because it removes evidence
+stamping and lease cleanup together with authoring.
+
 The bank is the task-family boundary: every run reads and updates the same
 `memory_bank_dir/cards.json`. Completed randomized proposals add a compact
 `(task, run, delivered, success)` trial to the proposed card. A hierarchical
