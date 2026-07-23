@@ -12,7 +12,7 @@ The implementations are grouped as follows:
 | Family | Preset | Evaluator | Compute |
 |---|---|---|---|
 | Boosting control | `catboost` | Canonical CatBoost evaluator | CPU |
-| Classical deep learning | `tabm` | TabM-mini + PLE | GPU |
+| Classical deep learning | `tabm` | TabM + PLE | GPU |
 | Classical deep learning | `realmlp` | RealMLP-TD through PyTabKit | GPU |
 | Foundation model | `tabicl` | TabICLv2 | GPU |
 | Foundation model | `tabpfn` | TabPFN v3 | GPU, non-commercial licensed weights |
@@ -164,7 +164,7 @@ the default timestamp has second-level resolution. Assign a distinct
 | Evaluator | Fixed recipe | Validation selection and final fit | Row weights |
 |---|---|---|---|
 | CatBoost | Symmetric depth-6 trees, 2,000-tree ceiling, learning rate 0.05 | Early stopping on validation; fresh train+validation refit for selected rounds | Yes |
-| TabM | TabM-mini + PLE, `k=32`, California-tuned paper recipe | Early stopping on validation; fresh train+validation refit for the selected epoch count | Yes |
+| TabM | Official-example full TabM + PLE, `k=32`, one fixed cross-dataset recipe | Early stopping on validation; fresh train+validation refit for the selected epoch count | Yes |
 | RealMLP | RealMLP-TD, one ensemble member, 256-epoch ceiling | Package stopping epoch from validation; fresh train+validation refit at that epoch | No |
 | TabICLv2 | Frozen 2026-02-12 checkpoint, eight estimators | No optimizer or early stopping; train+validation is labeled context | No |
 | TabPFN v3 | Default classifier or official medium-data regressor checkpoint, eight estimators, automatic estimator scaling disabled | No optimizer or early stopping; train+validation is labeled context | No |
@@ -195,6 +195,7 @@ eventual evolved winners.
 
 | Evaluator | Fitness / R² | CV fold SD | RMSE | Validation wall time |
 |---|---:|---:|---:|---:|
+| TabM, fixed universal recipe | 0.839009 | 0.006085 | 0.464086 | 49.5 s |
 | RealMLP-TD | 0.823277 | 0.000716 | 0.487801 | 247.0 s |
 | TabICLv2 | 0.872979 | 0.001994 | 0.413508 | 6.8 s |
 | TabPFN v3 medium-data | 0.881001 | 0.000379 | 0.400275 | 10.1 s |
@@ -277,6 +278,25 @@ graph JSON and dataset split stay fixed within a cell; only the evaluator seed
 changes. Use the default `--phase test` only for a preregistered finalist panel.
 Use `--phase cv` while developing or screening so the untouched test split
 does not become a search signal.
+
+The same module has a short experiment-level frontend:
+
+```bash
+experiments/dag_tabular/compare_matrix.sh \
+  --graph catboost=catboost-winner.json \
+  --graph tabm=tabm-winner.json \
+  --evaluator catboost --evaluator tabm \
+  --output cross_eval.json
+```
+
+The reported SD is specifically estimator-training dispersion on one fixed
+split. LightGBM and XGBoost receive each requested seed, but their fixed
+recipes use deterministic histogram construction with full row and feature
+sampling. Their seed replicates are consequently bit-for-bit identical and
+correctly have zero SD. Use repeated data splits or bootstrap resampling for
+sampling uncertainty; enabling bagging only at test time would instead change
+the estimator that selected the graph and invalidate the controlled transfer
+comparison.
 
 ## GPU allocation
 

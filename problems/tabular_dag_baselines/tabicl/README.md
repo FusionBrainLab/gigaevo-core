@@ -13,10 +13,12 @@ train+validation. Row weights are rejected.
 python run.py \
   experiment=tabular_dag/tabicl \
   llm=gemini35_flash \
-  memory/llm=qwen_instruct \
   algorithm=tabular/2d_local_ood \
   max_mutants=100
 ```
+
+This is the no-memory baseline. To run Memory V2, also add
+`pipeline=memory_guided memory=v2 memory/llm=qwen_instruct`.
 
 The public checkpoint downloads on the first real fit and is cached by
 Hugging Face. `GIGAEVO_TABICL_MODEL_PATH` can point to a pre-downloaded file.

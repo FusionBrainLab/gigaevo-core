@@ -15,10 +15,12 @@ train+validation. Row weights are rejected.
 python run.py \
   experiment=tabular_dag/tabpfn \
   llm=gemini35_flash \
-  memory/llm=qwen_instruct \
   algorithm=tabular/2d_local_ood \
   max_mutants=100
 ```
+
+This is the no-memory baseline. To run Memory V2, also add
+`pipeline=memory_guided memory=v2 memory/llm=qwen_instruct`.
 
 The adapter downloads the selected checkpoint directly from
 [`Prior-Labs/tabpfn_3`](https://huggingface.co/Prior-Labs/tabpfn_3), subject to

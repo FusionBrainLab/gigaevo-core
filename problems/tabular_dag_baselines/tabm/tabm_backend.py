@@ -54,16 +54,16 @@ def _env_bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class TabMConfig:
-    """Fixed California configuration, with explicit screening overrides."""
+    """Dataset-independent recipe from the official TabM end-to-end example."""
 
-    arch_type: str = "tabm-mini"
+    arch_type: str = "tabm"
     k: int = 32
-    n_blocks: int = 3
-    d_block: int = 576
-    dropout: float = 0.24050495351031098
-    learning_rate: float = 0.00029926241255995084
-    weight_decay: float = 0.0
-    n_bins: int = 30
+    n_blocks: int = 2
+    d_block: int = 512
+    dropout: float = 0.1
+    learning_rate: float = 0.002
+    weight_decay: float = 0.0003
+    n_bins: int = 48
     d_embedding: int = 16
     batch_size: int = 256
     eval_batch_size: int = 8192
@@ -72,12 +72,12 @@ class TabMConfig:
     gradient_clipping_norm: float = 1.0
     seed: int = 0
     amp: bool = True
-    share_training_batches: bool = False
+    share_training_batches: bool = True
     refit: bool = True
 
     @classmethod
     def from_env(cls) -> TabMConfig:
-        arch_type = os.environ.get(_PREFIX + "ARCH_TYPE", "tabm-mini")
+        arch_type = os.environ.get(_PREFIX + "ARCH_TYPE", "tabm")
         if arch_type not in {"tabm", "tabm-mini"}:
             raise ValueError(
                 f"{_PREFIX}ARCH_TYPE must be 'tabm' or 'tabm-mini'; got {arch_type!r}"
@@ -85,12 +85,12 @@ class TabMConfig:
         return cls(
             arch_type=arch_type,
             k=_env_int("K", 32),
-            n_blocks=_env_int("N_BLOCKS", 3),
-            d_block=_env_int("D_BLOCK", 576),
-            dropout=_env_float("DROPOUT", 0.24050495351031098),
-            learning_rate=_env_float("LEARNING_RATE", 0.00029926241255995084),
-            weight_decay=_env_float("WEIGHT_DECAY", 0.0),
-            n_bins=_env_int("N_BINS", 30, minimum=2),
+            n_blocks=_env_int("N_BLOCKS", 2),
+            d_block=_env_int("D_BLOCK", 512),
+            dropout=_env_float("DROPOUT", 0.1),
+            learning_rate=_env_float("LEARNING_RATE", 0.002),
+            weight_decay=_env_float("WEIGHT_DECAY", 0.0003),
+            n_bins=_env_int("N_BINS", 48, minimum=2),
             d_embedding=_env_int("D_EMBEDDING", 16),
             batch_size=_env_int("BATCH_SIZE", 256),
             eval_batch_size=_env_int("EVAL_BATCH_SIZE", 8192),
@@ -99,7 +99,7 @@ class TabMConfig:
             gradient_clipping_norm=_env_float("GRADIENT_CLIPPING_NORM", 1.0),
             seed=_env_int("SEED", 0, minimum=0),
             amp=_env_bool("AMP", True),
-            share_training_batches=_env_bool("SHARE_TRAINING_BATCHES", False),
+            share_training_batches=_env_bool("SHARE_TRAINING_BATCHES", True),
             refit=_env_bool("REFIT", True),
         )
 
@@ -177,7 +177,7 @@ def _training_batches(torch, train_size, config, device, generator):
 
 
 class TabMFeatureGraphModel(_GraphFeatureModel):
-    """FeatureGraph model using the tuned California TabM-mini+PLE recipe."""
+    """FeatureGraph model using the official dataset-independent TabM+PLE recipe."""
 
     def __init__(
         self, graph, *, device: str | None = None, config: TabMConfig | None = None

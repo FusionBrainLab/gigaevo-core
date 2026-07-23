@@ -16,10 +16,12 @@ epoch. Row weights are rejected rather than silently ignored.
 python run.py \
   experiment=tabular_dag/realmlp \
   llm=gemini35_flash \
-  memory/llm=qwen_instruct \
   algorithm=tabular/2d_local_ood \
   max_mutants=100
 ```
+
+This is the no-memory baseline. To run Memory V2, also add
+`pipeline=memory_guided memory=v2 memory/llm=qwen_instruct`.
 
 ```bash
 python -m problems.tabular_dag_baselines.realmlp.test program.json
