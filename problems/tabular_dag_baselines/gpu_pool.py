@@ -88,8 +88,8 @@ def random_gpu_lease(model_name: str) -> Iterator[GpuLease]:
 
     Model-specific variables such as ``GIGAEVO_TABM_DEVICE`` take precedence
     over shared ``GIGAEVO_TABULAR_DAG_*`` settings.  The default lock directory
-    is shared by every model so concurrent TabM, RealMLP, TabICL, and TabPFN
-    evaluations cannot select the same physical device.
+    is shared by every model so concurrent TabM, RealMLP, TabICL, TabPFN, and
+    TabFM evaluations cannot select the same physical device.
     """
 
     prefix = _model_prefix(model_name)

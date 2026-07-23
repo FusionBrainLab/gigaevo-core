@@ -207,6 +207,9 @@ module = [
     "scipy.*",
     "cloudpickle.*",
     "litellm.*",
+    # Problem-local modules imported after runtime path setup
+    "tabular_data",
+    "tabular_problem",
     "langchain.*",
     "langchain_core.*",
     "langchain_openai.*",
@@ -252,6 +255,9 @@ module = [
     "tensorboardX.*",
     # [tabm-eval] extra
     "torch.*",
+    # Optional tabular baseline environments
+    "catboost.*",
+    "tabfm.*",
     # [dev] extra
     "uvicorn.*",
 ]

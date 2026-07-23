@@ -6,6 +6,7 @@ from enum import StrEnum
 from pathlib import Path
 import re
 import sys
+from typing import cast
 
 from catboost import CatBoostClassifier, CatBoostRegressor, Pool
 import numpy as np
@@ -119,17 +120,18 @@ class FeatureGraphModel:
         dataset = tabular_data.load_dataset(graph.dataset)
         self.task_type = dataset.task_type
         self.n_classes = dataset.n_classes
-        self.raw_column_types = {
+        self.raw_column_types: dict[str, FeatureValueKind] = {
             f"x{spec.index}": (
-                "categorical" if spec.kind == "categorical" else spec.kind
+                "numerical"
+                if spec.kind == "numeric"
+                else cast(FeatureValueKind, spec.kind)
             )
             for spec in getattr(dataset, "columns", ())
         }
 
     def _feature_kind(self, column: str) -> FeatureValueKind:
         if column in self.raw_column_types:
-            kind = self.raw_column_types[column]
-            return "numerical" if kind == "numeric" else kind
+            return self.raw_column_types[column]
         if column in self.graph.raw_columns:
             return "numerical"
         for node in self.graph.nodes:

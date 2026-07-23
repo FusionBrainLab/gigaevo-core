@@ -1,9 +1,111 @@
 from __future__ import annotations
 
+import gc
+import weakref
+
 import numpy as np
+import pytest
 
 from problems.dag_tab.graph import FeatureGraph
 from problems.tabular_dag_baselines import validation
+
+
+def test_failed_evaluation_drops_traceback_resources_before_cleanup(
+    monkeypatch,
+):
+    payload = FeatureGraph(
+        dataset="california", raw_columns=["x0", "x1"], nodes=[]
+    ).model_dump(mode="json")
+    state = {}
+    cache = {}
+
+    class _Dataset:
+        task_type = "regression"
+        X_train = np.zeros((4, 2))
+        y_train = np.zeros(4)
+
+    class _Resource:
+        pass
+
+    class _Problem:
+        def validate(self, factory):
+            resource = factory()
+            state["reference"] = weakref.ref(resource)
+            raise RuntimeError("model failure")
+
+    def build(_dataset):
+        return _Problem()
+
+    def model_builder(_graph, _device):
+        resource = _Resource()
+        cache["resource"] = resource
+        return resource
+
+    def cleanup():
+        cache.clear()
+        gc.collect()
+        state["collected_before_release"] = state["reference"]() is None
+
+    monkeypatch.setattr(
+        validation.tabular_data, "load_dataset", lambda _name: _Dataset()
+    )
+    monkeypatch.setattr(validation, "build", build)
+
+    metrics, artifact = validation.validate_payload(
+        payload,
+        estimator_name="resource-test",
+        model_builder=model_builder,
+        config={},
+        resource_cleanup=cleanup,
+    )
+
+    assert metrics["is_valid"] == 0.0
+    assert artifact["validation_failure_stage"] == "model_fit"
+    assert state["collected_before_release"] is True
+
+
+def test_failed_test_score_drops_chained_traceback_resources_before_cleanup(
+    monkeypatch,
+):
+    payload = FeatureGraph(
+        dataset="california", raw_columns=["x0", "x1"], nodes=[]
+    ).model_dump(mode="json")
+    state = {}
+    cache = {}
+
+    class _Resource:
+        def fail(self):
+            raise ValueError("inner failure")
+
+    class _Problem:
+        def score_on_test(self, factory):
+            resource = factory()
+            state["reference"] = weakref.ref(resource)
+            try:
+                resource.fail()
+            except ValueError as exc:
+                raise RuntimeError("outer failure") from exc
+
+    def model_builder(_graph, _device):
+        resource = _Resource()
+        cache["resource"] = resource
+        return resource
+
+    def cleanup():
+        cache.clear()
+        gc.collect()
+        state["collected_before_release"] = state["reference"]() is None
+
+    monkeypatch.setattr(validation, "build", lambda _dataset: _Problem())
+
+    with pytest.raises(RuntimeError, match="RuntimeError: outer failure"):
+        validation.score_payload_on_test(
+            payload,
+            model_builder=model_builder,
+            resource_cleanup=cleanup,
+        )
+
+    assert state["collected_before_release"] is True
 
 
 def test_test_scoring_delegates_to_canonical_tabular_problem(monkeypatch):

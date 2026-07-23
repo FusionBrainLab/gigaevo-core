@@ -7,6 +7,7 @@ from contextlib import nullcontext
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 import sys
+import traceback
 from typing import Any
 
 import numpy as np
@@ -37,10 +38,11 @@ from problems.tabular_dag_baselines.gpu_pool import (  # noqa: E402
 ModelBuilder = Callable[[FeatureGraph, str | None], object]
 DeviceArtifactBuilder = Callable[[str | None], dict[str, Any]]
 ReadinessCheck = Callable[[FeatureGraph, object], None]
+ResourceCleanup = Callable[[], None]
 
 
 def _config_payload(config: object) -> object:
-    if is_dataclass(config):
+    if is_dataclass(config) and not isinstance(config, type):
         return asdict(config)
     if isinstance(config, dict):
         return dict(config)
@@ -57,6 +59,7 @@ def validate_payload(
     artifact_extra: dict[str, Any] | None = None,
     device_artifact_builder: DeviceArtifactBuilder | None = None,
     readiness_check: ReadinessCheck | None = None,
+    resource_cleanup: ResourceCleanup | None = None,
 ):
     """Run the canonical graph checks and tabular CV around one estimator."""
 
@@ -93,6 +96,7 @@ def validate_payload(
         stage = "model_fit"
         lease_context = random_gpu_lease(gpu_model) if gpu_model else nullcontext(None)
         device_artifact: dict[str, Any] = {}
+        model_failure: dict[str, object] | None = None
         with lease_context as lease:
             device = None if lease is None else lease.device
             if device_artifact_builder is not None:
@@ -103,9 +107,20 @@ def validate_payload(
                     return model_builder(graph, device)
 
                 metrics, evaluation_artifact = build(graph.dataset).validate(factory)
+            except Exception as exc:
+                model_failure = _failure_artifact(exc, stage)
+                if exc.__traceback__ is not None:
+                    traceback.clear_frames(exc.__traceback__)
+                exc.__traceback__ = None
             finally:
-                if lease is not None:
-                    release_cuda(lease)
+                try:
+                    if resource_cleanup is not None:
+                        resource_cleanup()
+                finally:
+                    if lease is not None:
+                        release_cuda(lease)
+        if model_failure is not None:
+            return dict(_INVALID), model_failure
         metrics.update(
             {
                 "graph_node_count": float(len(graph.nodes)),
@@ -136,6 +151,7 @@ def score_payload_on_test(
     model_builder: ModelBuilder,
     gpu_model: str | None = None,
     readiness_check: ReadinessCheck | None = None,
+    resource_cleanup: ResourceCleanup | None = None,
 ) -> dict[str, float]:
     """Score a frozen graph on the untouched split under the same protocol."""
 
@@ -143,12 +159,28 @@ def score_payload_on_test(
     if readiness_check is not None:
         readiness_check(graph, tabular_data.load_dataset(graph.dataset))
     lease_context = random_gpu_lease(gpu_model) if gpu_model else nullcontext(None)
+    failure: str | None = None
+    result: dict[str, float] | None = None
     with lease_context as lease:
         device = None if lease is None else lease.device
         try:
-            return build(graph.dataset).score_on_test(
+            result = build(graph.dataset).score_on_test(
                 lambda: model_builder(graph, device)
             )
+        except Exception as exc:
+            failure = f"{type(exc).__name__}: {exc}"
+            if exc.__traceback__ is not None:
+                traceback.clear_frames(exc.__traceback__)
+            exc.__traceback__ = None
         finally:
-            if lease is not None:
-                release_cuda(lease)
+            try:
+                if resource_cleanup is not None:
+                    resource_cleanup()
+            finally:
+                if lease is not None:
+                    release_cuda(lease)
+    if failure is not None:
+        raise RuntimeError(failure) from None
+    if result is None:
+        raise RuntimeError("test scorer returned no result")
+    return result

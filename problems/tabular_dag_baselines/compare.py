@@ -19,6 +19,7 @@ EVALUATOR_MODULES = {
     "realmlp": "problems.tabular_dag_baselines.realmlp.validate",
     "tabicl": "problems.tabular_dag_baselines.tabicl.validate",
     "tabpfn": "problems.tabular_dag_baselines.tabpfn.validate",
+    "tabfm": "problems.tabular_dag_baselines.tabfm.validate",
     "lightgbm": "problems.tabular_dag_baselines.lightgbm.validate",
     "xgboost": "problems.tabular_dag_baselines.xgboost.validate",
 }

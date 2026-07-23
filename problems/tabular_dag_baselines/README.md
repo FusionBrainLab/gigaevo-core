@@ -16,12 +16,13 @@ The implementations are grouped as follows:
 | Classical deep learning | `realmlp` | RealMLP-TD through PyTabKit | GPU |
 | Foundation model | `tabicl` | TabICLv2 | GPU |
 | Foundation model | `tabpfn` | TabPFN v3 | GPU, non-commercial licensed weights |
+| Foundation model | `tabfm` | TabFM 1.0 PyTorch | GPU, non-commercial licensed weights |
 | Boosting | `lightgbm` | LightGBM 4.6 | CPU |
 | Boosting | `xgboost` | XGBoost 2.1 | CPU |
 
 The `catboost` preset resolves directly to the control implementation in
 [`problems/dag_tab`](../dag_tab); no duplicate CatBoost problem directory exists.
-All seven presets default to the true no-memory control:
+All eight presets default to the true no-memory control:
 `pipeline=guided memory=none`. Estimator choice and memory policy are
 independent.
 
@@ -45,6 +46,7 @@ Its tested package versions are:
 | PyTabKit | 1.7.3 |
 | TabICL | 2.1.1 |
 | TabPFN | 8.1.0 |
+| TabFM | 1.0.1 |
 | LightGBM | 4.6.0 |
 | XGBoost | 2.1.4 |
 
@@ -61,6 +63,7 @@ uv pip install \
   pytabkit==1.7.3 \
   tabicl==2.1.1 \
   tabpfn==8.1.0 \
+  'tabfm[pytorch]==1.0.1' \
   lightgbm==4.6.0 \
   xgboost==2.1.4
 uv pip check
@@ -86,6 +89,7 @@ python run.py experiment=tabular_dag/realmlp
 # Foundation models
 python run.py experiment=tabular_dag/tabicl
 python run.py experiment=tabular_dag/tabpfn
+python run.py experiment=tabular_dag/tabfm
 
 # Boosting
 python run.py experiment=tabular_dag/lightgbm
@@ -94,7 +98,7 @@ python run.py experiment=tabular_dag/xgboost
 
 The preset supplies all FeatureGraph plumbing: problem path, JSON
 program format, dynamic raw-feature seed, dataset-aware task context, and the
-canonical structured-diff mutation operator. The seven small model presets all
+canonical structured-diff mutation operator. The eight small model presets all
 inherit that one shared configuration; there is no config file per dataset.
 The bare commands above use no memory reader, writer, or memory LLM.
 Each problem prompt also names and explains its fixed estimator before the
@@ -164,6 +168,7 @@ the default timestamp has second-level resolution. Assign a distinct
 | RealMLP | RealMLP-TD, one ensemble member, 256-epoch ceiling | Package stopping epoch from validation; fresh train+validation refit at that epoch | No |
 | TabICLv2 | Frozen 2026-02-12 checkpoint, eight estimators | No optimizer or early stopping; train+validation is labeled context | No |
 | TabPFN v3 | Default classifier or official medium-data regressor checkpoint, eight estimators, automatic estimator scaling disabled | No optimizer or early stopping; train+validation is labeled context | No |
+| TabFM 1.0 | Frozen PyTorch checkpoint, plain 32-estimator recipe, at most 500 features per estimator | No optimizer or early stopping; train+validation is labeled context | No |
 | LightGBM | 2,000-tree ceiling, 63 leaves, learning rate 0.05 | Early stopping on validation; fresh train+validation refit for selected rounds | Yes |
 | XGBoost | Histogram trees, depth 6, 2,000-tree ceiling, learning rate 0.05 | Early stopping on validation; fresh train+validation refit for selected rounds | Yes |
 
@@ -178,6 +183,7 @@ model directory:
 - [`realmlp`](realmlp/README.md)
 - [`tabicl`](tabicl/README.md)
 - [`tabpfn`](tabpfn/README.md)
+- [`tabfm`](tabfm/README.md)
 - [`lightgbm`](lightgbm/README.md)
 - [`xgboost`](xgboost/README.md)
 
@@ -212,9 +218,9 @@ follows:
    plus validation rows at the selected fixed training length.
 5. Predict the held-out evolutionary query.
 
-TabICL and TabPFN are frozen in-context models. They have no dataset-specific
-optimizer or early stopping, so fitting rows plus validation rows form their
-labeled context directly.
+TabICL, TabPFN, and TabFM are frozen in-context models. They have no
+dataset-specific optimizer or early stopping, so fitting rows plus validation
+rows form their labeled context directly.
 
 Final test scoring repeats the corresponding clean fit once with
 `X_train + X_val`, predicts `X_test`, and only then reads test labels to compute
@@ -232,6 +238,7 @@ python -m problems.tabular_dag_baselines.tabm.test program.json
 python -m problems.tabular_dag_baselines.realmlp.test program.json
 python -m problems.tabular_dag_baselines.tabicl.test program.json
 python -m problems.tabular_dag_baselines.tabpfn.test program.json
+python -m problems.tabular_dag_baselines.tabfm.test program.json
 python -m problems.tabular_dag_baselines.lightgbm.test program.json
 python -m problems.tabular_dag_baselines.xgboost.test program.json
 ```
@@ -273,10 +280,10 @@ does not become a search signal.
 
 ## GPU allocation
 
-TabM, RealMLP, TabICL, and TabPFN lease one randomly selected visible GPU for an
-entire evaluation. Cross-process file locks are shared across all four models,
-so concurrent runs do not silently select the same physical GPU. With the four
-GPUs on this host, no launch override is needed.
+TabM, RealMLP, TabICL, TabPFN, and TabFM lease one randomly selected visible GPU
+for an entire evaluation. Cross-process file locks are shared across all five
+models, so concurrent runs do not silently select the same physical GPU. With
+the four GPUs used by the standard campaign, no launch override is needed.
 
 To restrict the shared pool explicitly:
 
@@ -315,6 +322,14 @@ context contains 16,512 rows; pretraining-limit checks stay enabled. An
 existing v3 checkpoint may instead be supplied through
 `GIGAEVO_TABPFN_MODEL_PATH`.
 
+TabFM downloads only the selected task subfolder from the pinned
+[`google/tabfm-1.0.0-pytorch`](https://huggingface.co/google/tabfm-1.0.0-pytorch)
+revision before taking a GPU. Each task checkpoint is about 6.6 GB. The weights
+use the TabFM Non-Commercial License; check that license before use. The model
+is loaded once per evaluation, shared across its CV folds and behavior probes,
+and dropped before the GPU lease is released. Set `GIGAEVO_TABFM_MODEL_PATH` to
+a complete local checkpoint directory to run without downloading.
+
 ## Verification
 
 Run the focused suite in `evo_torch`:
@@ -323,9 +338,9 @@ Run the focused suite in `evo_torch`:
 python -m pytest tests/tabular_dag_baselines tests/dag_tabm -q
 ```
 
-The suite covers Hydra composition and runtime construction for all seven
+The suite covers Hydra composition and runtime construction for all eight
 presets, shared train/validation/test routing, randomized GPU locks, real
 LightGBM and XGBoost fits, the RealMLP search/refit protocol, TabM preprocessing
-and training, comparison-result aggregation, and checkpoint-free TabICL/TabPFN
-adapter checks. Tests that require optional research packages skip cleanly in
-the normal lightweight environment.
+and training, comparison-result aggregation, and checkpoint-free
+TabICL/TabPFN/TabFM adapter checks. Tests that require optional research
+packages skip cleanly in the normal lightweight environment.

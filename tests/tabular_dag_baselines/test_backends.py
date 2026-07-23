@@ -20,6 +20,11 @@ from problems.tabular_dag_baselines.realmlp.backend import (
     RealMLPConfig,
     RealMLPFeatureGraphModel,
 )
+from problems.tabular_dag_baselines.tabfm.backend import (
+    TabFMConfig,
+    TabFMFeatureGraphModel,
+    ensure_tabfm_ready,
+)
 from problems.tabular_dag_baselines.tabicl.backend import (
     TabICLConfig,
     TabICLFeatureGraphModel,
@@ -276,6 +281,64 @@ def test_tabicl_constructor_is_pinned_without_downloading_checkpoint(graph):
     assert params["n_estimators"] == 3
     assert params["batch_size"] == 2
     assert params["device"] == "cpu"
+
+
+def test_tabfm_constructor_uses_pinned_recipe_and_shared_model(
+    graph, monkeypatch, tmp_path
+):
+    pytest.importorskip("tabfm")
+    checkpoint = tmp_path / "regression"
+    checkpoint.mkdir()
+    (checkpoint / "config.json").write_text('{"is_classifier": false}')
+    (checkpoint / "model.safetensors").touch()
+    loaded_model = object()
+    calls = []
+
+    def fake_load(**kwargs):
+        calls.append(kwargs)
+        return loaded_model
+
+    monkeypatch.setattr(
+        "problems.tabular_dag_baselines.tabfm.backend._load_tabfm_model",
+        fake_load,
+    )
+    model_cache = {}
+    config = TabFMConfig(
+        n_estimators=3,
+        batch_size=2,
+        max_num_features=123,
+        max_num_rows=456,
+        model_path=str(tmp_path),
+    )
+    model = TabFMFeatureGraphModel(
+        graph,
+        device="cpu",
+        config=config,
+        model_cache=model_cache,
+    )
+
+    first = model._make_estimator([1])
+    second = TabFMFeatureGraphModel(
+        graph,
+        device="cpu",
+        config=config,
+        model_cache=model_cache,
+    )._make_estimator([1])
+    params = first.get_params()
+
+    assert len(calls) == 1
+    assert second.model is loaded_model
+    assert params["model"] is loaded_model
+    assert params["n_estimators"] == 3
+    assert params["batch_size"] == 2
+    assert params["max_num_features"] == 123
+    assert params["max_num_rows"] == 456
+    assert params["random_state"] == 0
+    with pytest.raises(RuntimeError, match="task does not match"):
+        ensure_tabfm_ready(
+            TabFMConfig(model_path=str(checkpoint)),
+            model_type="classification",
+        )
 
 
 def test_tabpfn_constructor_is_pinned_to_v3_without_loading_weights(graph):

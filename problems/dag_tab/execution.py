@@ -111,11 +111,13 @@ _PANDAS_ONLY_TARGET_ATTRIBUTES = {
 def _literal_selector_columns(selection: ast.expr) -> set[str] | None:
     if isinstance(selection, ast.Constant) and isinstance(selection.value, str):
         return {selection.value}
-    if isinstance(selection, (ast.List, ast.Tuple)) and all(
-        isinstance(item, ast.Constant) and isinstance(item.value, str)
-        for item in selection.elts
-    ):
-        return {item.value for item in selection.elts}
+    if isinstance(selection, (ast.List, ast.Tuple)):
+        columns: set[str] = set()
+        for item in selection.elts:
+            if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
+                return None
+            columns.add(item.value)
+        return columns
     return None
 
 

@@ -13,6 +13,7 @@ MODELS = (
     "realmlp",
     "tabicl",
     "tabpfn",
+    "tabfm",
     "lightgbm",
     "xgboost",
 )
