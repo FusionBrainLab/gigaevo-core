@@ -2,6 +2,7 @@
 
 program_format:
   id: python_source
+  loader_pattern: "*.py"
   # Normal GigaEvo programs are Python files. The default pipeline keeps
   # ValidateCodeStage + CallProgramFunction unchanged for this format.
   evaluation_feature: null

@@ -19,8 +19,7 @@ from problems.dag_tab.execution import (
     transform_target,
 )
 from problems.dag_tab.validate import FeatureGraphModel as _GraphFeatureModel
-
-from .gpu_pool import random_gpu_lease
+from problems.tabular_dag_baselines.gpu_pool import random_gpu_lease, release_cuda
 
 _PREFIX = "GIGAEVO_TABM_"
 
@@ -666,7 +665,7 @@ class TabMFeatureGraphModel(_GraphFeatureModel):
                 X_train, y_train, X_val, y_val, X_query, device_name=self.device
             )
 
-        with random_gpu_lease() as lease:
+        with random_gpu_lease("tabm") as lease:
             try:
                 return self._fit_predict_on_device(
                     X_train,
@@ -677,12 +676,7 @@ class TabMFeatureGraphModel(_GraphFeatureModel):
                     device_name=lease.device,
                 )
             finally:
-                if lease.logical_index is not None:
-                    import torch
-
-                    gc.collect()
-                    with torch.cuda.device(lease.logical_index):
-                        torch.cuda.empty_cache()
+                release_cuda(lease)
 
 
 # Keep the conventional name used by the other tabular adapters.

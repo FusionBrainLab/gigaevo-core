@@ -1,6 +1,6 @@
 defaults:
-  - experiment: base       # Base experiment setup (override with experiment=full_featured)
   - program_format: python_source  # Candidate representation: python_source | json_document
+  - experiment: base       # Base experiment setup (override with experiment=full_featured)
   - storage: disk          # Program/archive storage backend (override with storage=redis)
   - /migration_bus: disabled
   - aggregator: none       # NullAggregator sentinel (override with aggregator=<name>)

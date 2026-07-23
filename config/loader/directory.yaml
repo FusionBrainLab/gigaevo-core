@@ -6,4 +6,6 @@ program_loader:
   pattern: ${loader.pattern}
 
 loader:
-  pattern: "*.py"
+  # Keep loader selection independent of defaults-list ordering: the selected
+  # representation owns its file suffix.
+  pattern: ${program_format.loader_pattern}

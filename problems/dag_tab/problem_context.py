@@ -51,12 +51,20 @@ class DagTabProblemContext(ProblemContext):
         super().__init__(problem_dir)
         self.dataset = dataset
 
+    def _tabular_root(self) -> Path:
+        """Locate canonical tabular datasets from top-level or nested problems."""
+        for ancestor in (self.problem_dir, *self.problem_dir.parents):
+            candidate = ancestor / "tabular"
+            if candidate.is_dir():
+                return candidate
+        raise FileNotFoundError(
+            f"Missing canonical tabular problem root above {self.problem_dir}"
+        )
+
     @property
     def task_description(self) -> str:
         abi = super().task_description
-        dataset_path = _dataset_description_path(
-            self.problem_dir.parent / "tabular", self.dataset
-        )
+        dataset_path = _dataset_description_path(self._tabular_root(), self.dataset)
         if dataset_path is not None:
             dataset_context = _extract_dataset_context(dataset_path.read_text())
         else:

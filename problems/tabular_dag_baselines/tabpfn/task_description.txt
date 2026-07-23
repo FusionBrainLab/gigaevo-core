@@ -1,0 +1,42 @@
+TASK
+Evolve a versioned JSON FeatureGraph for supervised tabular learning. The selected dataset and its column semantics are appended to this universal ABI at runtime. Fitness is produced by the frozen TabPFN v3 in-context model with eight inference estimators; improve useful predictive signal without target leakage.
+
+ESTIMATOR OVERVIEW
+TabPFN v3 is a pretrained tabular foundation model whose synthetic-task prior is queried in context: labeled fitting rows condition a frozen transformer, with no dataset-specific gradient training. This adapter averages eight inference estimators and uses the official medium-data v3 regressor for California.
+
+GENOME CONTRACT
+The genome is one JSON FeatureGraph:
+- schema_version: 1
+- dataset: selected dataset id; immutable during mutation
+- raw_columns: immutable names x0..xN-1 supplied by the dataset loader
+- dropped_raw_columns: optional raw columns hidden from TabPFN v3 but still usable by graph nodes
+- target: optional invertible regression-only target transform
+- nodes: topologically ordered feature nodes; the neutral seed may contain no nodes
+
+Each node declares id, kind, dependencies, input_cols, output_cols, output_types, code, rationale, and is_output. Generated inputs must come from declared earlier dependencies. input_cols and dependencies are synchronized from literal df/df_fit column reads where those can be read off the code; otherwise your declaration is taken as written, and a column you read but did not declare is simply not present at run time.
+
+NODE ABI
+Your node receives exactly the columns listed in input_cols, in that order, and nothing else. df is that slice: df.to_numpy() is your declared inputs as a matrix, not the whole dataset, and a column you read but did not declare is not there to be read.
+
+rowwise code may be either a transform(df) function or its function body. It is called once per row block, so a row's output must depend on that row alone.
+
+aggregate code may be either a transform(df_fit, y_fit, df) function or its function body, and is called once per graph execution. df_fit is the frozen fitting frame; y_fit is its target, supplied as a one-dimensional numpy.ndarray during scored evaluation; df is every row to be featurised, and its first len(df_fit) rows are the rows of df_fit, in order. Any deterministic state may be fitted from df_fit and, when supervised, from y_fit -- summary statistics, vocabularies, estimators, search structures, reference sets -- and then queried for each row of df. State is fitted from the fitting rows only; no y is supplied for any later row. Third-party libraries installed in the environment may be imported and used.
+
+Two invariants are required, and runtime checks probe them by re-executing your graph. A row's output may depend on any row of df_fit, but never on which other rows of df happen to be present. And for the first len(df_fit) rows -- rows at positions below len(df_fit) are fitting rows, and you may branch on that position -- a supervised output must not change when only that row's own y_fit changes; exclude each fitting row's own contribution, by position or by fold. When producing a fitting row's supervised value out of fold, every quantity feeding it -- including any smoothing prior, Bayesian/shrinkage default, and the fallback for unseen categories -- must itself be computed from the same out-of-fold subset that excludes that row. A global statistic over all fitting rows, such as the overall target mean used as a prior or default, still contains that row's own target and leaks even when the fold means themselves are clean. For example, computing per-fold group means but filling unseen groups with the overall mean of y_fit, or shrinking each group mean toward that overall mean as a prior, both leak, because that overall mean includes the row being encoded; take the fallback and the prior from the row's own out-of-fold split instead. Rows at or beyond that position may use state fitted from all fitting targets.
+
+Both kinds must add exactly their declared output columns to the received df and return that same df with unchanged row count, index, and all declared inputs; do not construct a fresh DataFrame that omits the declared inputs. Code runs as trusted Python under static and behavioral checks, not as a security sandbox.
+
+TYPES AND OUTPUTS
+output_types are numerical, categorical, binary, or ordinal. Declare a label-like output such as a cluster id, bucket, or category categorical, or, if numerical, emit integer codes; object or string dtype fails a numerical declaration. Every non-empty graph must expose at least one non-sample_weight generated output through is_output=true. Raw columns remain estimator inputs unless listed in dropped_raw_columns. TabPFN v3 does not support row weights, so do not emit sample_weight.
+
+TABPFN PREPROCESSING AND CONTEXT
+TabPFN v3 is frozen and performs no dataset-specific gradient updates. The FeatureGraph and categorical vocabulary are fitted on the labeled context; TabPFN then applies its checkpoint's built-in preprocessing and averages eight in-context estimators. Automatic estimator-count scaling is disabled so candidate compute remains fixed.
+
+LEAKAGE AND ROBUSTNESS
+Never infer raw-feature semantics from target values or non-fitting rows. Fit aggregate state and categorical vocabularies from df_fit and y_fit only. Handle missing values, unknown categories, zero denominators, non-finite values, and domain restrictions explicitly. For anonymized columns, rely only on numerical behavior and declared types rather than invented real-world meanings.
+
+TARGET TRANSFORM
+A target transform contains code and inverse_code, is regression-only, and must be deterministic, finite, and round-trip to the original target within tolerance. code receives y_fit and y and returns the transformed target; inverse_code receives y_fit and predictions and returns predictions mapped back to the original target scale. Derive all transform state only from the supplied y_fit.
+
+SEARCH GUIDANCE
+Start from the raw-feature neutral baseline and make one coherent mutation. Every diff declares structural_intent: local_edit, extend_chain, compose_chain, or simplify_graph. Use extend_chain when a useful parent intermediate should gain another processing stage; it must increase parent depth. Use compose_chain to create a new multi-stage path of depth at least 2, and set minimum_child_depth when targeting a longer path. Graph size and depth are diagnostic descriptors, not objectives to minimize: retain useful parent nodes, prune redundant ones, and use the available node budget when additional signal is justified. Prefer a composed node over recomputing the same intermediate expression from raw columns. Place producers before consumers; read the producer's output column in the consumer code and input_cols, and name the producer id in dependencies. Keep intermediate nodes is_output=false unless TabPFN v3 also benefits from the intermediate value. Independent raw-derived features remain appropriate when there is no meaningful reusable intermediate. Keep rationales short and never add depth solely for complexity.

@@ -1,6 +1,6 @@
 # DAG Tab: FeatureGraph evolution
 
-`dag_tab` evolves a JSON DAG of pandas feature transformations while reusing the standard GigaEvo engine, JSON-document pipeline, structured-diff mutation agent, storage, lineage, mutation context, and MAP-Elites archive. It also reuses dataset arrays and metadata, cross-validation protocol, metrics, behavior descriptors, and the final-test split from `problems/tabular`.
+`dag_tab` evolves a JSON DAG of pandas feature transformations while reusing the standard GigaEvo engine, JSON-document pipeline, structured-diff mutation agent, storage, lineage, mutation context, and MAP-Elites archive. It also reuses dataset arrays and metadata, cross-validation protocol, metrics, behavior descriptors, and the final-test split from `problems/tabular`. It is the CatBoost control in the broader [`tabular_dag_baselines`](../tabular_dag_baselines/README.md) suite.
 
 The current architecture is dataset-parameterized. `problem.dataset=<name>` selects the data and semantic context, while `loader=dag_tab_seed` creates a neutral raw-feature graph with the exact dataset width at runtime. No separate evolution runtime, LLM client, or dataset-specific FeatureGraph seed lives in this problem. Experimental evidence, resolved defects, remaining limitations, and the next study design are summarized in [`docs/dag_tab_research_report.md`](../../docs/dag_tab_research_report.md).
 
@@ -105,6 +105,13 @@ Select a dataset with `problem.dataset=<name>` and use `loader=dag_tab_seed`. Th
 Required environment: `GIGAEVO_TABULAR_DATA` and `OPENAI_API_KEY`. Qwen-backed
 Memory V2 additionally requires `LOCAL_LLM_PROXY` and `LITELLM_MASTER_KEY`.
 
+The preferred entry point is the same one-switch interface as every other
+evaluator. California is the default:
+
+```bash
+python run.py experiment=tabular_dag/catboost
+```
+
 These are single 100-mutation S4-style runs on `adult`; replace
 `problem.dataset=adult` as needed. Existing defaults provide three-fold mean CV,
 one parent, disk storage, live Memory V2 writes, and per-run Hydra output paths.
@@ -113,13 +120,10 @@ one parent, disk storage, live Memory V2 writes, and per-run Hydra output paths.
 
 ```bash
 python run.py \
-  problem.name=dag_tab \
+  experiment=tabular_dag/catboost \
   problem.dataset=adult \
-  loader=dag_tab_seed \
-  program_format=json_document \
   pipeline=guided \
   memory=none \
-  mutation=structured_diff_dag_tab \
   llm=gemini35_flash \
   algorithm=tabular/2d_local_ood \
   mutation_operator.allowed_changes.max_nodes=10 \
@@ -132,11 +136,8 @@ The base config already selects `pipeline=memory_guided memory=v2`.
 
 ```bash
 python run.py \
-  problem.name=dag_tab \
+  experiment=tabular_dag/catboost \
   problem.dataset=adult \
-  loader=dag_tab_seed \
-  program_format=json_document \
-  mutation=structured_diff_dag_tab \
   llm=gemini35_flash \
   memory/llm=qwen_instruct \
   algorithm=tabular/2d_local_ood \
@@ -162,10 +163,7 @@ The neutral seed is evaluated automatically by the normal run. A zero-mutation s
 
 ```bash
 python run.py \
-  problem.name=dag_tab \
-  program_format=json_document \
-  mutation=structured_diff_dag_tab \
-  loader=dag_tab_seed \
+  experiment=tabular_dag/catboost \
   problem.dataset=adult \
   max_mutants=0
 ```
@@ -177,6 +175,12 @@ python -m problems.dag_tab.test /path/to/program.json
 ```
 
 The JSON result carries exactly the metric keys that dataset's task type emits in `problems/tabular`, so dag_tab and tabular test numbers are directly comparable.
+
+For graph-by-estimator transfer after evolution, use the suite's
+[`compare`](../tabular_dag_baselines/compare.py) and
+[`compare_matrix`](../tabular_dag_baselines/compare_matrix.py) commands. They
+keep each saved graph fixed and report repeated-seed mean and sample standard
+deviation without creating another evolution run.
 
 ## Tests
 

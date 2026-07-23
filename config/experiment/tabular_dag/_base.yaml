@@ -1,0 +1,14 @@
+# @package _global_
+
+# Extend the normal experiment stack, then replace only the representation,
+# loader, mutation operator, and problem used by estimator-controlled
+# FeatureGraph experiments.
+defaults:
+  - /experiment/base
+  - override /program_format: json_document
+  - override /loader: dag_tab_seed
+  - override /mutation: structured_diff_dag_tab
+  - _self_
+
+problem:
+  dataset: california

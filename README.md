@@ -18,6 +18,7 @@ and supports single runs, multi-island evolution, and prompt co-evolution.
 - **[Quick Start](docs/QUICKSTART.md)** — Get running in 5 minutes
 - **[Architecture Guide](docs/ARCHITECTURE.md)** — System design overview
 - **[Generic tabular FeatureGraph evolution](problems/dag_tab/README.md)** — Evolve dataset-parameterized JSON feature DAGs with fixed CatBoost evaluation
+- **[Tabular DAG estimator baselines](problems/tabular_dag_baselines/README.md)** — Evolve or cross-evaluate the same FeatureGraphs with CatBoost, TabM, RealMLP, TabICLv2, TabPFN v3, LightGBM, or XGBoost
 
 ## Documentation
 

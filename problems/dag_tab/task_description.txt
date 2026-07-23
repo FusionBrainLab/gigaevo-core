@@ -1,5 +1,8 @@
 TASK
-Evolve a versioned JSON FeatureGraph for supervised tabular learning. The selected dataset and its column semantics are appended to this universal ABI at runtime. Fitness is produced by the fixed evaluation protocol; improve useful validation signal without leaking validation or test information.
+Evolve a versioned JSON FeatureGraph for supervised tabular learning. The selected dataset and its column semantics are appended to this universal ABI at runtime. Fitness is produced by a fixed CatBoost evaluator; improve useful predictive signal without target leakage.
+
+ESTIMATOR OVERVIEW
+CatBoost is gradient boosting over symmetric decision trees, with native handling of categorical inputs. This evaluator fixes depth 6, learning rate 0.05, a 2,000-tree ceiling, four CPU threads, and seed 0.
 
 GENOME CONTRACT
 The genome is one JSON FeatureGraph:
@@ -26,14 +29,14 @@ is its target, supplied as a one-dimensional numpy.ndarray during scored evaluat
 is every row to be featurised, and its first len(df_fit) rows are the rows of df_fit, in
 order. Any deterministic state may be fitted from df_fit and, when supervised, from
 y_fit -- summary statistics, vocabularies, estimators, search structures, reference sets
--- and then queried for each row of df. State is fitted from the fitting rows only:
-there is no validation split and no y for any later row. Third-party libraries installed
+-- and then queried for each row of df. State is fitted from the fitting rows only;
+no y is supplied for any later row. Third-party libraries installed
 in the environment may be imported and used.
 
-Two invariants are required, and validation probes them by re-executing your graph. A
+Two invariants are required, and runtime checks probe them by re-executing your graph. A
 row's output may depend on any row of df_fit, but never on which other rows of df happen
 to be present. And for the first len(df_fit) rows -- rows at positions below len(df_fit)
-are fitting rows, and you may test that positionally -- a supervised output must not
+are fitting rows, and you may branch on that position -- a supervised output must not
 change when only that row's own y_fit changes; exclude each fitting row's own
 contribution, by position or by fold. When producing a fitting row's supervised value
 out of fold, every quantity feeding it -- including any smoothing prior,
@@ -47,16 +50,16 @@ leak, because that overall mean includes the row being encoded; take the fallbac
 prior from the row's own out-of-fold split instead.
 Rows at or beyond that position may use state fitted from all fitting targets.
 
-Both kinds must add exactly their declared output columns to the received df and return that same df with unchanged row count, index, and all declared inputs; do not construct a fresh DataFrame that omits the declared inputs. Code runs as trusted Python under static and behavioral validation, not as a security sandbox.
+Both kinds must add exactly their declared output columns to the received df and return that same df with unchanged row count, index, and all declared inputs; do not construct a fresh DataFrame that omits the declared inputs. Code runs as trusted Python under static and behavioral checks, not as a security sandbox.
 
 TYPES AND OUTPUTS
-output_types are numerical, categorical, binary, or ordinal. Declare a label-like output such as a cluster id, bucket, or category categorical, or, if numerical, emit integer codes; object or string dtype fails a numerical declaration. Every non-empty graph must expose at least one non-sample_weight generated output through is_output=true. Raw columns remain estimator inputs unless listed in dropped_raw_columns. sample_weight is reserved and removed before CatBoost feature fitting.
+output_types are numerical, categorical, binary, or ordinal. Declare a label-like output such as a cluster id, bucket, or category categorical, or, if numerical, emit integer codes; object or string dtype fails a numerical declaration. Every non-empty graph must expose at least one non-sample_weight generated output through is_output=true. Raw columns remain estimator inputs unless listed in dropped_raw_columns. sample_weight is reserved and, when emitted, supplies finite non-negative CatBoost row weights rather than becoming an input feature.
 
 LEAKAGE AND ROBUSTNESS
-Never infer feature semantics from target values, validation results, or test/query rows. Fit aggregate state and categorical vocabularies on training data only. Handle missing values, unknown categories, zero denominators, non-finite values, and domain restrictions explicitly. Prefer compact hypotheses grounded in the appended dataset description; for anonymized columns, rely only on numerical behavior and declared types rather than invented real-world meanings.
+Never infer raw-feature semantics from target values or non-fitting rows. Fit aggregate state and categorical vocabularies from df_fit and y_fit only. Handle missing values, unknown categories, zero denominators, non-finite values, and domain restrictions explicitly. For anonymized columns, rely only on numerical behavior and declared types rather than invented real-world meanings.
 
 TARGET TRANSFORM
-A target transform contains code and inverse_code, is regression-only, and must be deterministic, finite, and round-trip to the original target within tolerance. code receives y_fit and y and returns the transformed target; inverse_code receives y_fit and predictions and returns predictions mapped back to the original target scale. Final test refit recomputes aggregate and target-transform state on train+validation.
+A target transform contains code and inverse_code, is regression-only, and must be deterministic, finite, and round-trip to the original target within tolerance. code receives y_fit and y and returns the transformed target; inverse_code receives y_fit and predictions and returns predictions mapped back to the original target scale. Derive all transform state only from the supplied y_fit.
 
 SEARCH GUIDANCE
 Start from the raw-feature neutral baseline and make one coherent mutation. Every diff declares structural_intent: local_edit, extend_chain, compose_chain, or simplify_graph. Use extend_chain when a useful parent intermediate should gain another processing stage; it must increase parent depth. Use compose_chain to create a new multi-stage path of depth at least 2, and set minimum_child_depth when targeting a longer path. Graph size and depth are diagnostic descriptors, not objectives to minimize: retain useful parent nodes, prune redundant ones, and use the available node budget when additional signal is justified. Prefer a composed node over recomputing the same intermediate expression from raw columns. Place producers before consumers; read the producer's output column in the consumer code and input_cols, and name the producer id in dependencies. Keep intermediate nodes is_output=false unless CatBoost also benefits from the intermediate value. Independent raw-derived features remain appropriate when there is no meaningful reusable intermediate. Keep rationales short and never add depth solely for complexity.

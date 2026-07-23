@@ -6,12 +6,12 @@ import pytest
 
 from problems.dag_tab.execution import GraphTriplet
 from problems.dag_tab.graph import FeatureGraph
-from problems.dag_tabm.tabm_backend import (
+from problems.tabular._common.tabular_data import ColumnSpec
+from problems.tabular_dag_baselines.tabm.tabm_backend import (
     TabMConfig,
     TabMFeatureGraphModel,
     _training_batches,
 )
-from problems.tabular._common.tabular_data import ColumnSpec
 
 
 class _Dataset:
@@ -50,8 +50,8 @@ def test_feature_preprocessing_is_fit_local_and_has_unknown_category(monkeypatch
 
 def test_small_cpu_fit_predict_smoke(monkeypatch):
     pytest.importorskip("torch")
-    pytest.importorskip("tabm")
     pytest.importorskip("rtdl_num_embeddings")
+    pytest.importorskip("tabm")
     config = TabMConfig(
         k=2,
         n_blocks=1,

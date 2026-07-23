@@ -2,13 +2,14 @@
 
 program_format:
   id: json_document
+  loader_pattern: "*.json"
   # Apply after the default source-evaluation feature: JSON parsing replaces
   # Python compilation/execution, while validation/metrics/memory stay shared.
   evaluation_feature:
     _target_: gigaevo.entrypoint.program_formats.JsonDocumentEvaluationFeature
 
 loader:
-  pattern: "*.json"
+  pattern: ${program_format.loader_pattern}
 
 # JSON-document chain problems usually keep mutation prompts beside the problem.
 # Missing files still fall back per prompt file to the package defaults.

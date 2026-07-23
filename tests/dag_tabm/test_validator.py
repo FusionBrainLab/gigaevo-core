@@ -5,8 +5,9 @@ from dataclasses import dataclass
 import numpy as np
 from sklearn.model_selection import KFold
 
-from problems.dag_tabm import validate as validator
 from problems.tabular._common.tabular_metrics import regression_fold_metrics
+from problems.tabular_dag_baselines import validation as shared_validation
+from problems.tabular_dag_baselines.tabm import validate as validator
 
 
 @dataclass(frozen=True)
@@ -47,12 +48,18 @@ def test_validator_reuses_shared_folds_std_bd_and_test_protocol(monkeypatch):
 
     def fake_factory(graph, device, config):
         factory_calls.append((graph.dataset, device, config.seed))
-        return PredictFirstColumn
+        return PredictFirstColumn()
 
     monkeypatch.setenv("GIGAEVO_TABM_DEVICE", "cpu")
     monkeypatch.setenv("GIGAEVO_TABULAR_CV_FOLDS", "3")
-    monkeypatch.setattr(validator.tabular_data, "load_dataset", lambda name: dataset)
-    monkeypatch.setattr(validator, "_factory", fake_factory)
+    monkeypatch.setattr(
+        shared_validation.tabular_data, "load_dataset", lambda name: dataset
+    )
+    monkeypatch.setattr(
+        validator,
+        "_builder",
+        lambda config: lambda graph, device: fake_factory(graph, device, config),
+    )
     monkeypatch.setattr(validator, "effective_amp_dtype", lambda *args, **kwargs: None)
 
     metrics, artifact = validator.validate(_payload())

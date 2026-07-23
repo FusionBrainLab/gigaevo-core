@@ -1,0 +1,7 @@
+# @package _global_
+defaults:
+  - /experiment/tabular_dag/_base
+  - _self_
+
+problem:
+  name: tabular_dag_baselines/tabm
