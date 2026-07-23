@@ -341,6 +341,32 @@ def test_tabfm_constructor_uses_pinned_recipe_and_shared_model(
         )
 
 
+def test_tabfm_repairs_incomplete_cached_checkpoint(monkeypatch, tmp_path):
+    pytest.importorskip("tabfm")
+    cached = tmp_path / "cached"
+    downloaded = tmp_path / "downloaded"
+    for checkpoint in (cached, downloaded):
+        task_dir = checkpoint / "regression"
+        task_dir.mkdir(parents=True)
+        (task_dir / "config.json").write_text('{"is_classifier": false}')
+    (downloaded / "regression" / "model.safetensors").touch()
+    calls = []
+
+    def fake_snapshot_download(**kwargs):
+        calls.append(kwargs)
+        return str(cached if kwargs.get("local_files_only") else downloaded)
+
+    monkeypatch.setattr(
+        "huggingface_hub.snapshot_download",
+        fake_snapshot_download,
+    )
+
+    resolved = ensure_tabfm_ready(TabFMConfig(), model_type="regression")
+
+    assert resolved == downloaded
+    assert [call.get("local_files_only", False) for call in calls] == [True, False]
+
+
 def test_tabpfn_constructor_is_pinned_to_v3_without_loading_weights(graph):
     pytest.importorskip("tabpfn")
     model = TabPFNFeatureGraphModel(

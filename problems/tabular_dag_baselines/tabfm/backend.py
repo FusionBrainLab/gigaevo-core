@@ -104,17 +104,22 @@ def ensure_tabfm_ready(config: TabFMConfig, *, model_type: TabFMModelType) -> Pa
     }
     try:
         resolved = snapshot_download(**download_args, local_files_only=True)
+        return _validate_checkpoint(
+            Path(resolved), model_type=model_type, setting="cached checkpoint"
+        )
     except Exception:
         try:
             resolved = snapshot_download(**download_args)
+            return _validate_checkpoint(
+                Path(resolved),
+                model_type=model_type,
+                setting="downloaded checkpoint",
+            )
         except Exception as exc:
             raise RuntimeError(
                 f"Could not prepare pinned TabFM {model_type} checkpoint: "
                 f"{type(exc).__name__}: {exc}"
             ) from exc
-    return _validate_checkpoint(
-        Path(resolved), model_type=model_type, setting="downloaded checkpoint"
-    )
 
 
 def _load_tabfm_model(
