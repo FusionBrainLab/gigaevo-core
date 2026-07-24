@@ -75,8 +75,20 @@ def test_v2_installs_live_refresh_hook() -> None:
         cfg.post_step_hook._target_
         == "gigaevo.memory.live_memory_hook.LiveMemoryRefreshHook"
     )
+    assert (
+        cfg.memory.write.post_run_hook._target_
+        == "gigaevo.evolution.engine.hooks.NullPostRunHook"
+    )
     assert cfg.memory.write.mode == "live"
     assert cfg.engine_config.post_step_hook_timeout_s == 900.0
+
+
+def test_end_of_run_write_keeps_full_finalizer() -> None:
+    cfg = _compose("pipeline=memory_guided", "memory=v2", "memory/write=end_of_run")
+
+    raw_write = OmegaConf.to_container(cfg.memory.write, resolve=False)
+    assert isinstance(raw_write, dict)
+    assert raw_write["post_run_hook"] == "${ref:memory.writer}"
 
 
 def test_pipeline_configs_expose_read_capability_metadata() -> None:
