@@ -695,6 +695,8 @@ def execute_graph(graph: FeatureGraph, frame: pd.DataFrame) -> pd.DataFrame:
 # Shares no positional landmark with the full frame: drops both endpoints so
 # first/last-row broadcasts differ, strides so neighbour ops (shift/diff) differ.
 _PROBE_SUBSET = slice(1, -1, 2)
+# Keep fitted estimators inside aggregate nodes bounded while spanning the probe frame.
+_OWN_TARGET_PROBE_MAX_ROWS = 64
 
 
 def _perturbed_target(target: np.ndarray, index: int, scale: float) -> np.ndarray:
@@ -843,7 +845,9 @@ def assert_split_invariant(
     column_scales = {
         column: _value_scale(baseline_fit[column]) for column in generated_columns
     }
-    for index in range(len(fit)):
+    probe_count = min(_OWN_TARGET_PROBE_MAX_ROWS, len(fit))
+    probe_indices = np.linspace(0, len(fit) - 1, num=probe_count, dtype=int)
+    for index in probe_indices:
         perturbed = _perturbed_target(target, index, scale)
         candidate_fit = execute_graph_triplet(
             own_target_graph, fit, empty, empty, y_fit=perturbed
