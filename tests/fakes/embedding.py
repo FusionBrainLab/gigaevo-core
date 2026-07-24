@@ -14,6 +14,7 @@ from chromadb.api.types import EmbeddingFunction
 
 class FakeEmbeddingFunction(EmbeddingFunction):
     embedded: list[str] = []
+    batches: list[list[str]] = []
 
     def __init__(self, model_name: str = "") -> None:
         self.model_name = model_name
@@ -30,8 +31,10 @@ class FakeEmbeddingFunction(EmbeddingFunction):
         return FakeEmbeddingFunction(**config)
 
     def __call__(self, input):
-        type(self).embedded.extend(input)
-        return [self._embed(text) for text in input]
+        batch = list(input)
+        type(self).embedded.extend(batch)
+        type(self).batches.append(batch)
+        return [self._embed(text) for text in batch]
 
     @staticmethod
     def _embed(text: str) -> list[float]:

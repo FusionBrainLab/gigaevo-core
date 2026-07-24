@@ -428,19 +428,30 @@ class ResearchAgent:
         candidates: dict[str, tuple[Card, float]],
     ) -> list[str]:
         new_ids: list[str] = []
-        for scoped in queries:
-            try:
-                hits = self._index.query(
-                    scoped.scope,
-                    scoped.query,
-                    self._config.top_k(scoped.scope),
-                    exclude_ids=exclude_ids,
-                )
-            except Exception:
-                logger.opt(exception=True).warning(
-                    "[Memory][Research] index query failed on scope {}", scoped.scope
-                )
-                continue
+        specs = [
+            (scoped.scope, scoped.query, self._config.top_k(scoped.scope))
+            for scoped in queries
+        ]
+        try:
+            hits_by_query = self._index.query_many(specs, exclude_ids=exclude_ids)
+        except Exception:
+            logger.opt(exception=True).warning(
+                "[Memory][Research] batched index query failed; retrying separately"
+            )
+            hits_by_query = []
+            for scope, query, top_k in specs:
+                try:
+                    hits = self._index.query(
+                        scope, query, top_k, exclude_ids=exclude_ids
+                    )
+                except Exception:
+                    logger.opt(exception=True).warning(
+                        "[Memory][Research] index query failed on scope {}", scope
+                    )
+                    hits = []
+                hits_by_query.append(hits)
+
+        for hits in hits_by_query:
             for rank, hit in enumerate(hits, start=1):
                 # Ranks are comparable across scopes and query formulations;
                 # raw embedding distances are not. Reciprocal-rank fusion also

@@ -30,6 +30,9 @@ class IndexHit(BaseModel):
     distance: float
 
 
+QuerySpec = tuple[str, str, int]
+
+
 def render_scope_document(card: Card, fields: Sequence[str]) -> str:
     """The text embedded for a card under a scope.
 
@@ -166,26 +169,80 @@ class VectorIndex:
         exclude_ids: frozenset[str] = frozenset(),
     ) -> list[IndexHit]:
         """The ``k`` closest cards to ``text`` in a scope, ascending distance."""
-        if scope not in self._collections:
-            raise KeyError(
-                f"unknown embed scope {scope!r}; configured: {sorted(self._collections)}"
-            )
-        collection = self._collections[scope]
+        return self.query_many(
+            [(scope, text, k)],
+            kind=kind,
+            task_key=task_key,
+            exclude_ids=exclude_ids,
+        )[0]
+
+    def query_many(
+        self,
+        queries: Sequence[QuerySpec],
+        *,
+        kind: CardKind | None = None,
+        task_key: str | None = None,
+        exclude_ids: frozenset[str] = frozenset(),
+    ) -> list[list[IndexHit]]:
+        """Run aligned nearest-neighbor queries with one embedding batch."""
+        for scope, _, _ in queries:
+            if scope not in self._collections:
+                raise KeyError(
+                    f"unknown embed scope {scope!r}; configured: "
+                    f"{sorted(self._collections)}"
+                )
+        outcomes: list[list[IndexHit]] = [[] for _ in queries]
+        eligible = [
+            (i, scope, text, k)
+            for i, (scope, text, k) in enumerate(queries)
+            if k > 0 and text.strip()
+        ]
+        if not eligible:
+            return outcomes
+
         with self._lock:
-            if k <= 0 or not text.strip() or collection.count() == 0:
-                return []
-            # Asymmetric embedding: the retrieval query carries the embedder's
-            # query instruction; the indexed card documents never do (upsert
-            # embeds render_scope_document verbatim). Empty prefix is a no-op.
-            result = collection.query(
-                query_texts=[f"{self._embed.query_prefix}{text}"],
-                n_results=k,
-                where=self._where(kind, task_key, exclude_ids),
-                include=["distances"],
-            )
-        ids = result["ids"][0]
+            populated = {
+                scope: self._collections[scope].count() > 0
+                for scope in dict.fromkeys(scope for _, scope, _, _ in eligible)
+            }
+            active = [
+                (i, scope, text, k)
+                for i, scope, text, k in eligible
+                if populated[scope]
+            ]
+            if not active:
+                return outcomes
+
+            # The query instruction is asymmetric: indexed card documents never
+            # receive it. Embed distinct texts once even when several scopes use
+            # the same planner query.
+            prefixed = [f"{self._embed.query_prefix}{text}" for _, _, text, _ in active]
+            unique_texts = list(dict.fromkeys(prefixed))
+            vectors = self._embedding_fn(unique_texts)
+            by_text = dict(zip(unique_texts, vectors, strict=True))
+
+            groups: dict[tuple[str, int], list[tuple[int, Any]]] = {}
+            for (i, scope, _, k), text in zip(active, prefixed, strict=True):
+                groups.setdefault((scope, k), []).append((i, by_text[text]))
+
+            where = self._where(kind, task_key, exclude_ids)
+            for (scope, k), rows in groups.items():
+                collection = self._collections[scope]
+                result = collection.query(
+                    query_embeddings=cast(Any, [vector for _, vector in rows]),
+                    n_results=k,
+                    where=where,
+                    include=["distances"],
+                )
+                for row, (i, _) in enumerate(rows):
+                    outcomes[i] = self._query_hits(result, row)
+        return outcomes
+
+    @staticmethod
+    def _query_hits(result: Any, row: int) -> list[IndexHit]:
+        ids = result["ids"][row]
         result_distances = result["distances"]
-        distances = result_distances[0] if result_distances else []
+        distances = result_distances[row] if result_distances else []
         return [
             IndexHit(card_id=cid, distance=float(dist))
             for cid, dist in zip(ids, distances, strict=True)

@@ -117,6 +117,31 @@ def test_empty_query_prefix_is_noop(make_card, fake_embedder):
     assert fake_embedder.embedded == ["alpha"]
 
 
+def test_query_many_uses_one_embedding_batch_across_scopes(
+    index, make_card, fake_embedder
+):
+    alpha = make_card(description="alpha")
+    beta = make_card(description="beta")
+    index.upsert([alpha, beta])
+    fake_embedder.embedded.clear()
+    fake_embedder.batches.clear()
+
+    hits_by_query = index.query_many(
+        [
+            ("description", "alpha", 1),
+            ("desc_expl", "beta", 1),
+            ("desc_expl", "alpha", 1),
+        ]
+    )
+
+    assert [[hit.card_id for hit in hits] for hits in hits_by_query] == [
+        [alpha.id],
+        [beta.id],
+        [alpha.id],
+    ]
+    assert fake_embedder.batches == [["alpha", "beta"]]
+
+
 def test_unknown_scope_raises(index):
     with pytest.raises(KeyError, match="unknown embed scope"):
         index.query("nope", "text", 3)

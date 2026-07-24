@@ -22,6 +22,7 @@ def fake_embedder(monkeypatch):
         FakeEmbeddingFunction,
     )
     FakeEmbeddingFunction.embedded.clear()
+    FakeEmbeddingFunction.batches.clear()
     return FakeEmbeddingFunction
 
 
