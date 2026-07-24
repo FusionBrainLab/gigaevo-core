@@ -302,8 +302,10 @@ comparison.
 
 TabM, RealMLP, TabICL, TabPFN, and TabFM lease one randomly selected visible GPU
 for an entire evaluation. Cross-process file locks are shared across all five
-models, so concurrent runs do not silently select the same physical GPU. With
-the four GPUs used by the standard campaign, no launch override is needed.
+models. Each physical GPU admits at most two concurrent evaluators, and each
+evolution campaign may hold at most two GPU leases across the machine. All
+visible GPUs are discovered automatically, so neither the standard four-GPU
+campaign nor an eight-GPU node needs a launch override.
 
 To restrict the shared pool explicitly:
 

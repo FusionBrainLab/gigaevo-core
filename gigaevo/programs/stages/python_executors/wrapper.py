@@ -307,6 +307,10 @@ async def run_exec_runner(
     env = os.environ.copy()
     env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     env.setdefault("PYTHONUNBUFFERED", "1")
+    # Every persistent worker spawned by this process belongs to the same
+    # evolution campaign. GPU evaluators use this identity to bound one
+    # campaign's share of the machine.
+    env["GIGAEVO_EXEC_POOL_ID"] = str(os.getpid())
     # Cap intra-worker threading so concurrent mutants don't oversubscribe the box.
     # XGBoost/CatBoost/LightGBM/sklearn all multiply via libgomp/MKL.
     _exec_threads = os.environ.get("EVO_EXEC_THREADS") or str(

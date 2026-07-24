@@ -17,6 +17,8 @@ import time
 
 _GENERIC_PREFIX = "GIGAEVO_TABULAR_DAG_"
 _DEFAULT_LOCK_DIR = "/tmp/gigaevo-tabular-dag-gpu-leases"
+_CAMPAIGN_GPU_SLOTS = 2
+_GPU_SLOTS_PER_DEVICE = 2
 
 
 @dataclass(frozen=True)
@@ -77,9 +79,49 @@ def _allowed_indices(model_name: str, count: int) -> list[int]:
     return indices
 
 
-def _lock_path(lock_dir: Path, token: str) -> Path:
+def _lock_path(lock_dir: Path, token: str, slot: int) -> Path:
     digest = hashlib.sha256(token.encode()).hexdigest()[:16]
-    return lock_dir / f"gpu-{digest}.lock"
+    return lock_dir / f"gpu-{digest}-{slot}.lock"
+
+
+@contextmanager
+def _campaign_gpu_gate(
+    lock_dir: Path, *, deadline: float, model_name: str, timeout: float
+) -> Iterator[None]:
+    """Bound the number of workers one campaign can place in the GPU pool."""
+
+    campaign_id = os.environ.get("GIGAEVO_EXEC_POOL_ID")
+    if not campaign_id:
+        yield
+        return
+
+    digest = hashlib.sha256(campaign_id.encode()).hexdigest()[:16]
+    rng = random.SystemRandom()
+    while True:
+        slots = list(range(_CAMPAIGN_GPU_SLOTS))
+        rng.shuffle(slots)
+        for slot in slots:
+            descriptor = os.open(
+                lock_dir / f"campaign-{digest}-{slot}.lock",
+                os.O_CREAT | os.O_RDWR,
+                0o666,
+            )
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                os.close(descriptor)
+                continue
+            try:
+                yield
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                os.close(descriptor)
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"no {model_name} GPU lease became available within {timeout:g} seconds"
+            )
+        time.sleep(rng.uniform(0.05, 0.20))
 
 
 @contextmanager
@@ -88,8 +130,8 @@ def random_gpu_lease(model_name: str) -> Iterator[GpuLease]:
 
     Model-specific variables such as ``GIGAEVO_TABM_DEVICE`` take precedence
     over shared ``GIGAEVO_TABULAR_DAG_*`` settings.  The default lock directory
-    is shared by every model so concurrent TabM, RealMLP, TabICL, TabPFN, and
-    TabFM evaluations cannot select the same physical device.
+    is shared by every model so TabM, RealMLP, TabICL, TabPFN, and TabFM all
+    honor the same per-device capacity.
     """
 
     prefix = _model_prefix(model_name)
@@ -126,45 +168,55 @@ def random_gpu_lease(model_name: str) -> Iterator[GpuLease]:
     if timeout <= 0:
         raise ValueError(f"{timeout_name} must be positive")
 
-    rng = random.SystemRandom()
     deadline = time.monotonic() + timeout
-    while True:
-        probe_order = list(indices)
-        rng.shuffle(probe_order)
-        for index in probe_order:
-            token = tokens[index]
-            descriptor = os.open(
-                _lock_path(lock_dir, token), os.O_CREAT | os.O_RDWR, 0o666
-            )
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                os.close(descriptor)
-                continue
+    with _campaign_gpu_gate(
+        lock_dir, deadline=deadline, model_name=model_name, timeout=timeout
+    ):
+        rng = random.SystemRandom()
+        while True:
+            probe_order = list(indices)
+            rng.shuffle(probe_order)
+            for index in probe_order:
+                token = tokens[index]
+                slots = list(range(_GPU_SLOTS_PER_DEVICE))
+                rng.shuffle(slots)
+                for slot in slots:
+                    descriptor = os.open(
+                        _lock_path(lock_dir, token, slot),
+                        os.O_CREAT | os.O_RDWR,
+                        0o666,
+                    )
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        os.close(descriptor)
+                        continue
 
-            metadata = json.dumps(
-                {
-                    "pid": os.getpid(),
-                    "model": model_name,
-                    "logical_index": index,
-                    "visible_token": token,
-                    "acquired_at": time.time(),
-                }
-            ).encode()
-            os.ftruncate(descriptor, 0)
-            os.write(descriptor, metadata)
-            try:
-                yield GpuLease(f"cuda:{index}", index, token)
-            finally:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
-                os.close(descriptor)
-            return
+                    metadata = json.dumps(
+                        {
+                            "pid": os.getpid(),
+                            "model": model_name,
+                            "logical_index": index,
+                            "visible_token": token,
+                            "slot": slot,
+                            "acquired_at": time.time(),
+                        }
+                    ).encode()
+                    os.ftruncate(descriptor, 0)
+                    os.write(descriptor, metadata)
+                    try:
+                        yield GpuLease(f"cuda:{index}", index, token)
+                    finally:
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                        os.close(descriptor)
+                    return
 
-        if time.monotonic() >= deadline:
-            raise TimeoutError(
-                f"no {model_name} GPU lease became available within {timeout:g} seconds"
-            )
-        time.sleep(rng.uniform(0.05, 0.20))
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"no {model_name} GPU lease became available within "
+                    f"{timeout:g} seconds"
+                )
+            time.sleep(rng.uniform(0.05, 0.20))
 
 
 def release_cuda(lease: GpuLease) -> None:
