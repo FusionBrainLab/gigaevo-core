@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import problems.dag_tab.execution as graph_execution
 from problems.dag_tab.execution import (
     FeatureExecutionError,
     assert_split_invariant,
@@ -571,6 +572,37 @@ def test_own_target_probe_allows_leave_one_out_encoding():
         pd.DataFrame({"x0": [0, 0, 1, 1]}),
         np.array([1.0, 3.0, 10.0, 14.0]),
     )
+
+
+def test_own_target_probe_bounds_and_spreads_checked_rows(monkeypatch):
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[
+            _node(
+                kind="aggregate",
+                code="df['fe_first'] = df['x0'] * 2\nreturn df",
+            )
+        ],
+    )
+    checked: list[int] = []
+    real_perturb = graph_execution._perturbed_target
+
+    def record_perturb(target, index, scale):
+        checked.append(index)
+        return real_perturb(target, index, scale)
+
+    monkeypatch.setattr(graph_execution, "_perturbed_target", record_perturb)
+    assert_split_invariant(
+        graph,
+        pd.DataFrame({"x0": np.arange(128, dtype=float)}),
+        np.arange(128, dtype=float),
+    )
+
+    assert len(checked) == 64
+    assert checked[0] == 0
+    assert checked[-1] == 127
+    assert checked == sorted(set(checked))
 
 
 def test_dropped_raw_columns_remain_available_to_nodes_but_not_output():
