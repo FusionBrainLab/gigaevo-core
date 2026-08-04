@@ -298,6 +298,23 @@ class TestCompositeEstimateRemaining:
         )
         assert result == (30.0, "MaxMutantsStopper")
 
+    def test_all_mode_with_an_unbounded_child_is_unbounded(self) -> None:
+        # "all" continues until every child fires, so an unbounded child
+        # makes the composite unbounded — the bounded children only give a
+        # lower bound. Mirrors remaining_dispatches().
+        stopper = CompositeStopper(
+            mode="all",
+            children=[
+                MaxMutantsStopper(max_mutants=100),
+                FitnessPlateauStopper(window=10),
+            ],
+        )
+        tp = EngineThroughput(mutants_per_second=2.0, elapsed_seconds=20.0)
+        assert (
+            stopper.estimate_remaining(_ctx(total_mutants=40, elapsed_seconds=20.0), tp)
+            is None
+        )
+
     def test_all_unbounded_returns_none(self) -> None:
         stopper = CompositeStopper(
             mode="any",
