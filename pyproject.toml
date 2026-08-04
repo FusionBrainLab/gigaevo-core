@@ -127,7 +127,7 @@ tabm-eval = [
 dev = [
     "pre-commit",
     "python-semantic-release",
-    "ruff",
+    "ruff==0.15.8",
     "mypy>=1.10",
     "types-PyYAML",
     "types-redis",

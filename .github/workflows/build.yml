@@ -16,7 +16,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install ruff
+      # Pinned: an unpinned install lets any ruff release change the verdict
+      # without a code change. 0.16 added Markdown formatting, which turned main
+      # red on 39 untouched docs. Keep in sync with pyproject dev + pre-commit.
+      - run: pip install ruff==0.15.8
       - name: Ruff check
         run: ruff check .
       - name: Ruff format
