@@ -170,7 +170,7 @@ tmp/
 
 # Keep the frozen Cohn snapshot: the spherical arms are graded against these mu values,
 # and a regenerated one would silently move the baseline they are scored on
-!aaai_submit/_harness/protocol/cohn_snapshot.json
+!problems/aaai_submit/_harness/protocol/cohn_snapshot.json
 
 # Keep benchmark history (small, append-only) — rebuild with scripts if lost
 !tools/benchmark_history.jsonl
