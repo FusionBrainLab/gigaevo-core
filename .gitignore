@@ -168,6 +168,10 @@ tmp/
 # Keep dag_tab seed programs required to start evolution
 !problems/dag_tab/initial_programs/*.json
 
+# Keep the frozen Cohn snapshot: the spherical arms are graded against these mu values,
+# and a regenerated one would silently move the baseline they are scored on
+!problems/_harness/protocol/cohn_snapshot.json
+
 # Keep benchmark history (small, append-only) — rebuild with scripts if lost
 !tools/benchmark_history.jsonl
 

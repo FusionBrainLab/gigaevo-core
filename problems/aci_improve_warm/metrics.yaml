@@ -1,0 +1,70 @@
+# Identical in all three arms. The arms differ in the interface the LLM implements,
+# never in what is measured or how it is scored.
+specs:
+  fitness:
+    description: Main objective, higher is better
+    decimals: 5
+    is_primary: true
+    higher_is_better: true
+    # fitness = C, the autocorrelation ratio maximized from the cold constant seed.
+    # ACI maximizes, so the fitness IS the objective (hex minimizes L and stores -L;
+    # the sign is the only difference). The bounds are the MAP-Elites binning range and
+    # must bracket what a run actually produces. Upper: C <= 1 is the analytic ceiling
+    # (0.88922 <= sup C <= 1), so 1.0. Lower: the from-scratch floor is C=2/3 (constant
+    # seed) and the arms climb toward 0.96102; 0.5 keeps a below-floor valid draw
+    # binnable without wasting bins on the (0, 0.5] region no arm should sit in.
+    lower_bound: 0.5
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 0.001
+    sentinel_value: -1000
+  is_valid:
+    description: Whether the program is valid (1 valid, 0 invalid)
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 1.0
+    sentinel_value: 0
+  # Diagnostics. include_in_prompts is false on all three: telling one arm how many
+  # calls it got, or how often it was feasible, is coaching that the other arms do
+  # not receive. They exist to answer the reviewer's objection that the DirectEvolve
+  # baseline is one-shot -- a basic-arm run reporting proposals=1 is a crippled
+  # baseline, and the number has to be recorded to show it is not.
+  #
+  # Stage B is bounded by the wall clock, not a round count. A single FFT grade at
+  # N=50000 is ~8ms, so a cheap program can make many calls; the ceiling is set where a
+  # metric that overflowed its range would stop being readable, not where we expect the
+  # arms to land.
+  proposals:
+    description: Calls the program was given within its wall-clock budget
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 20000.0
+    include_in_prompts: false
+    significant_change: 1.0
+    sentinel_value: 0
+  accepted:
+    description: Calls that improved the incumbent
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1000.0
+    include_in_prompts: false
+    significant_change: 1.0
+    sentinel_value: 0
+  valid_rate:
+    description: Fraction of calls the independent verifier accepted as feasible
+    decimals: 3
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: false
+    significant_change: 0.05
+    sentinel_value: 0

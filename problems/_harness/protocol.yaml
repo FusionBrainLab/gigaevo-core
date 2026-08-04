@@ -1,0 +1,88 @@
+# Runtime protocol constants for the shared harness.
+#
+# One entry per BENCHMARK, never one per arm: the three arms of a benchmark must run
+# the identical controller, sandbox and budget, or the comparison between them
+# measures the harness instead of the method. Paths are relative to problems/_harness.
+
+controller:
+  grading_seed: 101
+  hex:
+    stage_a_seeds: 10
+    sigma_schedule:
+    - 100.0
+    - 50.0
+    - 10.0
+    - 5.0
+    - 1.0
+    - 0.5
+    - 0.1
+    - 0.05
+    - 0.01
+    - 0.005
+    - 0.001
+  spherical:
+    stage_a_seeds: 1
+    sigma_schedule:
+    - 1.0
+    - 0.35938137
+    - 0.12915497
+    - 0.04641589
+    - 0.01668101
+    - 0.00599484
+    - 0.00215443
+    - 0.00077426
+    - 0.00027826
+    - 0.0001
+  aci:
+    stage_a_seeds: 10
+    sigma_schedule:
+    - 1.0
+    - 0.31622777
+    - 0.1
+    - 0.03162278
+    - 0.01
+    - 0.00316228
+    - 0.001
+budgets:
+  hex:
+    candidate_evaluation_seconds: 600
+    candidate_startup_seconds: 120
+    direct_minimum_launch_seconds: 10.0
+  spherical:
+    config_evaluation_seconds: 45
+    candidate_startup_seconds: 120
+    direct_minimum_launch_seconds: 2.0
+  aci:
+    candidate_evaluation_seconds: 600
+    candidate_startup_seconds: 120
+    direct_minimum_launch_seconds: 10.0
+benchmarks:
+  hex:
+    evolution_instances:
+    - 23
+  aci:
+    evolution_instances:
+    - 50000
+  spherical:
+    # The 14 (dimension, count) configurations every spherical arm evolves on. Plural
+    # where hex and aci are singular: one instance cannot carry a generalisation claim.
+    development_split:
+    - [8, 669]
+    - [9, 521]
+    - [9, 625]
+    - [10, 785]
+    - [11, 613]
+    - [11, 692]
+    - [12, 343]
+    - [13, 244]
+    - [13, 818]
+    - [14, 692]
+    - [15, 380]
+    - [15, 527]
+    - [16, 296]
+    - [16, 807]
+    catalogue_snapshot: protocol/cohn_snapshot.json
+security:
+  candidate_resident_limit: 8GiB
+  cpu_limit: 1
+  gpu_visible: false

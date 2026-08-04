@@ -164,7 +164,17 @@ include = ["gigaevo*"]
 [tool.ruff]
 line-length = 88  # same as in black
 target-version = "py311"
-exclude = [".claude/worktrees", "experiments/*/top_programs_*"]
+# The two seed pools below are frozen artifacts, not source: hex26_adapt's seed is
+# byte-identical to the strip of a published appendix, and aci_improve_warm's seeds
+# embed the ImprovEvolve improver programs verbatim under a thin fixed-n adapter.
+# Both carry recorded provenance hashes, so formatting or import-sorting them would
+# break the very identity that makes them usable as a baseline.
+exclude = [
+    ".claude/worktrees",
+    "experiments/*/top_programs_*",
+    "problems/hex26_adapt/initial_programs",
+    "problems/aci_improve_warm/initial_programs",
+]
 
 [tool.ruff.lint]
 # Enable pycodestyle (`E`), Pyflakes (`F`), and isort (`I`) codes

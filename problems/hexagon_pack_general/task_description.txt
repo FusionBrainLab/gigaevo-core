@@ -1,0 +1,65 @@
+**TASK DEFINITION – GENERAL HEXAGON PACKING (DIRECT SOLVER)**
+
+**Challenge:** Implement a Python function that directly computes a packing of $N$ non-overlapping unit regular hexagons inside a flat-topped regular enclosing hexagon of minimal side length.
+
+**Specific Benchmark:** $N=11$.
+**General Requirement:** The code must be valid for any $N$ from 1 to 25.
+
+**GEOMETRIC SPECIFICATIONS**
+1.  **Unit Hexagons (Items):**
+    *   Regular hexagons with circumradius $r = 1.0$.
+    *   Side length = 1.0.
+    *   May be arbitrarily placed $(x, y)$ and rotated $(\theta)$.
+2.  **Enclosing Hexagon (Container):**
+    *   Regular, flat-topped, centered at $(0,0)$.
+    *   "Flat-topped" vertices are located at angles $[0^\circ, 60^\circ, 120^\circ, 180^\circ, 240^\circ, 300^\circ]$ relative to the center.
+    *   Objective: Minimize the enclosing hexagon's side length $L$ (which is equal to its circumradius).
+
+**OBJECTIVE FUNCTION**
+Maximize Fitness: $-L$ (Minimize side length $L$).
+*Target for N=11:* $L \le 3.92$.
+
+**CONSTRAINTS**
+1.  **Containment:** All vertices of every unit hexagon must lie inside or on the boundary of the enclosing hexagon.
+2.  **Non-overlap:** The intersection area between any pair of unit hexagons must be zero (touching is allowed).
+3.  **Count:** Exactly `hex_num` unit hexagons must be placed.
+
+**EVALUATION**
+*   One evaluation = ONE call to `entrypoint()` with default arguments (`hex_num=11`, `seed=0`), hard wall-clock limit 300 seconds. Spend the budget well INSIDE the call: internal restarts, local optimization, and best-of selection are allowed and encouraged.
+*   The returned configuration is validated independently (overlap check + recomputed enclosing side length). An invalid configuration means the program is discarded.
+*   **Generality is graded.** After evolution, the best programs are re-validated by calling `entrypoint(hex_num=N, seed)` for OTHER values of $N$ in 1..25 (e.g. 12, 14, 17, 23). A program that only works at $N=11$ — hardcoded coordinate tables, counts, or layouts that break at other $N$ — fails the task. Every code path must derive its geometry from `hex_num`.
+
+**IMPLEMENTATION REQUIREMENTS**
+
+**Libraries:**
+Use `numpy`, `scipy`, `sklearn`, `jax`, `optax`, `jaxopt` or standard Python libraries.
+
+**Function Interface:**
+You must implement the following function exactly:
+
+```python
+import numpy as np
+
+def entrypoint(hex_num: int = 11, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Directly computes a complete packing for `hex_num` unit hexagons.
+
+    Args:
+        hex_num: Number of hexagons to pack. MUST generalize over 1..25.
+        seed: Random seed. Results must be deterministic given (hex_num, seed).
+
+    Returns:
+        centers: np.ndarray of shape (hex_num, 2) of hexagon center coordinates
+        angles: np.ndarray of shape (hex_num,) of rotations in radians [0, 2π)
+    """
+```
+
+**CRITICAL FAILURE MODES**
+*   **Wrong Shapes:** Returning arrays of shape `(12, ...)` when `hex_num=11`.
+*   **Geometry Errors:** Assuming point-topped enclosing hexagon instead of flat-topped.
+*   **Invalid Output:** Hexagons overlapping or protruding outside the boundary in the final result.
+*   **Lost Generality:** Hardcoded $N=11$ constants, coordinate tables, or layouts that break for other `hex_num` values.
+*   **Unbounded Runtime:** Not finishing within the 300-second evaluation limit.
+
+**DOCUMENTATION**
+Supply your code with a brief explanation of the algorithm using LaTeX in the introductory comment.

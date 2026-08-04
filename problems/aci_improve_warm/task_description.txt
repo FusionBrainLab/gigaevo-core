@@ -1,0 +1,94 @@
+**TASK DEFINITION – SECOND AUTOCORRELATION INEQUALITY OPTIMIZER**
+
+**Challenge:** Implement a Python class that maximizes the autocorrelation ratio $C$ of a non-negative function $f$ sampled on a length-$N$ grid.
+
+**Specific Benchmark:** $N=50000$.
+**General Requirement:** The code must be valid for any grid resolution $n \ge 100$.
+
+**PROBLEM SPECIFICATION**
+1.  **The function f (Config):**
+    *   A 1-D array of $n$ entrywise non-negative real samples, $f \in \mathbb{R}_{\ge 0}^{n}$, of a function on an interval.
+    *   $n$ is the grid RESOLUTION and is fixed by the constructor. It is not yours to change.
+2.  **The autoconvolution:**
+    *   $g = f * f$, the full discrete autoconvolution of $f$ with itself (length $2n-1$), computed by FFT.
+
+**OBJECTIVE FUNCTION**
+Maximize Fitness: $C = \dfrac{\lVert f * f \rVert_2^2}{\lVert f * f \rVert_1 \cdot \lVert f * f \rVert_\infty}$.
+*   $C$ is scale-invariant: multiplying $f$ by any positive constant leaves $C$ unchanged, so only the SHAPE of $f$ matters.
+*   $C \in (0, 1]$. The constant seed $f = \mathbf{1}$ gives $C = 2/3$ at every resolution; the search climbs from there.
+*   *Reference to beat:* the best published value is $C \approx 0.96102$. That is a target, not a starting point you are handed — you build $f$ yourself.
+
+**CONSTRAINTS**
+1.  **Non-negativity:** Every entry of the returned array must satisfy $f_i \ge 0$.
+2.  **Length:** The returned array must have exactly $n$ entries.
+3.  **Finiteness:** All entries must be finite (no NaN, no Inf), and $f$ must not be all zeros.
+
+**EVALUATION BUDGET**
+One evaluation gives your class ONE total wall-clock budget. The evaluator calls it repeatedly until that budget is spent, independently validates every array it hands back, and keeps the best valid one. Nothing else is rationed, so the cost of a call is a real cost: a cheap call buys more calls, and an expensive call has to earn its keep by being better. Time spent inside one call is time no other call can use.
+
+**IMPLEMENTATION REQUIREMENTS**
+
+**Libraries:**
+Use `numpy`, `scipy`, `sklearn`, `jax`, `optax`, `jaxopt` or standard Python libraries.
+
+**Class Interface:**
+You must implement the following class structure exactly:
+
+```python
+import numpy as np
+
+class Improver:
+    def __init__(self, n=50000, seed: int = 0):
+        self.n = n
+        self.seed = seed
+        # Initialize RNG or JAX keys here
+
+    def improve(self, input_config: np.ndarray, seed=None) -> np.ndarray:
+        """
+        Refines an existing array f toward higher C.
+        Must accept valid OR invalid inputs and push them toward validity and optimality.
+
+        Args:
+            input_config: np.ndarray of shape (n,) -- the current f
+            seed: Optional seed
+
+        Returns:
+            f: np.ndarray of shape (n,), entrywise non-negative
+        """
+        pass
+
+    def perturb(self, input_config: np.ndarray, intensity: float, seed=None) -> np.ndarray:
+        """
+        Applies DISCRETE or structural modifications to escape local optima.
+        Since improve() handles continuous local search, perturb() must handle the "jumps" that improve() cannot do.
+
+        Args:
+            input_config: np.ndarray of shape (n,) -- the current f
+            intensity: Float in (0, 1]. Higher intensity = a larger move, as a fraction of the current scale of f.
+
+        Returns:
+            f: np.ndarray of shape (n,), entrywise non-negative
+        """
+        pass
+
+    def generate_config(self, seed=None) -> np.ndarray:
+        """
+        Builds a valid starting array f from scratch.
+
+        Returns:
+            f: np.ndarray of shape (n,), entrywise non-negative
+        """
+        pass
+
+def entrypoint():
+    return Improver
+```
+
+**CRITICAL FAILURE MODES**
+*   **Wrong Length:** Returning an array whose length is not `n`.
+*   **Sign Violation:** Returning an array with negative entries; $f$ must be entrywise non-negative.
+*   **Degenerate Output:** Returning all zeros, or any NaN or Inf entry.
+*   **Resolution Cranking:** Inflating $C$ by changing `n` inside your code. The resolution is fixed by the constructor and graded as given.
+
+**DOCUMENTATION**
+Supply your code with a brief explanation of the algorithm using LaTeX in the introductory comment.

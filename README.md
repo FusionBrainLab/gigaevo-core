@@ -59,6 +59,7 @@ on firewalled/slow networks. Pick the install level that matches your use:
 | Chain/prompt problems: HoVer, HotpotQA, IFBench, gsm8k, musique, papillon, pupa | `[chains]` |
 | Optuna / CMA optimization stages | `[optimization]` |
 | Alphaevolve / hexagon_improver / santa2025 problems (JAX, sympy, shapely) | `[optimization]` |
+| `hex*` / `aci*` / `spherical_*` arms and their `problems/_harness` (JAX seeds) | `[optimization]` |
 | W&B / TensorBoard tracker backends | `[tracking]` |
 | TabM FeatureGraph evaluator | `[tabm-eval]` |
 | GAM memory **platform** backend (`use_api=True`) — local backend needs nothing | `[memory-platform]` |
