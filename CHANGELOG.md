@@ -2,6 +2,211 @@
 
 <!-- version list -->
 
+## v2.15.0 (2026-08-04)
+
+### Bug Fixes
+
+- Harden TabM evaluation fairness
+  ([#320](https://github.com/KhrulkovV/gigaevo-core-internal/pull/320),
+  [`f6085cd`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f6085cd0d6206aa455981ffc724cdc248608ee56))
+
+- **dag-tab**: Bound own-target leakage probes
+  ([`a0641d8`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a0641d8ad12a0778104f63adc2966f0a62b606f9))
+
+- **dag_tab**: Resolve grouped dataset descriptions
+  ([`e24c46e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e24c46eaee76cdb58a42b26b91126739d83c0a80))
+
+- **gpu**: Bound evaluator lease concurrency
+  ([`6a259f6`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6a259f661fccba8bddc14f3575c3034b5e8ca514))
+
+- **logging**: Preserve exception type through the non-blocking sink
+  ([#319](https://github.com/KhrulkovV/gigaevo-core-internal/pull/319),
+  [`38d6f7c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/38d6f7c4e91b1681a7002f98d0390d7aad3a19c5))
+
+- **memory**: Avoid redundant live-mode final flush
+  ([`0ccde54`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0ccde5468b361454d3a683519c43fe2bcc3feb7b))
+
+- **memory**: Deduplicate cards across shared tasks
+  ([#322](https://github.com/KhrulkovV/gigaevo-core-internal/pull/322),
+  [`ebe6569`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ebe65695f30922cf7ea5ee0d5802aae4056f3132))
+
+- **memory**: Preserve evaluator uncertainty on founding cards
+  ([`dc952fd`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/dc952fda73c252fc1c2b990fec30910fccf2b15d))
+
+- **memory**: Restore outcome layering boundary
+  ([#331](https://github.com/KhrulkovV/gigaevo-core-internal/pull/331),
+  [`1820a28`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1820a28def7e7d9001c2f24fa25ade970d8ae70e))
+
+- **memory**: Reward-credit ITT/citation-contrast + retirement hardening + non-blocking logging
+  ([#318](https://github.com/KhrulkovV/gigaevo-core-internal/pull/318),
+  [`5205490`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/52054906f6040665916013c6b0ac5abaeff1931d))
+
+- **memory**: Serialize shared-bank authoring
+  ([#323](https://github.com/KhrulkovV/gigaevo-core-internal/pull/323),
+  [`1614899`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1614899ecb05e4de76f8968e2aa2b3ce6b6b526e))
+
+- **memory-v2**: Stabilize dynamic MAP-Elites cells
+  ([`69c9a12`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/69c9a12df8926aabef7511678e075ecc74e6e96f))
+
+- **problem**: Harden Moscow numerical contract
+  ([`ad8d3ad`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ad8d3ad0bcf0813bb3c666d5ff05585788738b68))
+
+- **problem**: Trim Moscow task prompt
+  ([`f344416`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f344416b224389abf67bc82476096c8e176b5db8))
+
+- **tabfm**: Repair incomplete cached checkpoints
+  ([#327](https://github.com/KhrulkovV/gigaevo-core-internal/pull/327),
+  [`05e2785`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/05e278512b2ed4b26df60a5cd4d87817db65b214))
+
+- **tabular**: Make memory an explicit treatment
+  ([#325](https://github.com/KhrulkovV/gigaevo-core-internal/pull/325),
+  [`85caf83`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/85caf83eba5dada9615ad2f406850eba98c0a904))
+
+- **types**: Resolve package mypy errors
+  ([`6044a9a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6044a9acafd865c1569bac4c841a532d419d8971))
+
+### Chores
+
+- **dag-tab**: Add memory v2 launch recipe
+  ([`1b08357`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1b08357cba6181d34e6d097547340c72d6c272e9))
+
+- **dag-tab**: Persist S4 campaign runs
+  ([`71c4fb6`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/71c4fb6b928df7788cdcb8d96031e78361f7413f))
+
+- **dag-tab**: Support Gemini launch variants
+  ([`604d721`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/604d721620bbcd0627cc57c02e0eedd71ac14327))
+
+- **infra**: Refresh LLM routes and instruct capacity
+  ([#332](https://github.com/KhrulkovV/gigaevo-core-internal/pull/332),
+  [`f1d4211`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f1d421152f64ea96986f2947d5a2ba6f5b497807))
+
+### Continuous Integration
+
+- Pin ruff so a release cannot turn main red on its own
+  ([`e2bd5ec`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e2bd5ec4bfab8b00611744851c4fb851f858058d))
+
+### Documentation
+
+- **dag-tab**: Add unified experiment archive index
+  ([`915681c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/915681c677364d9f1120243f7564096cfefff16b))
+
+- **dag-tab**: Report memory v2 campaign
+  ([`309afec`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/309afec26d07242678c653cde7de4115faa96879))
+
+- **dag-tab**: Streamline launch recipes
+  ([`70bd008`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/70bd008505e896b7ce419ba3ba2e11636c05bb6b))
+
+- **infra**: Refresh fleet capacity comments
+  ([#332](https://github.com/KhrulkovV/gigaevo-core-internal/pull/332),
+  [`f1d4211`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f1d421152f64ea96986f2947d5a2ba6f5b497807))
+
+- **tabular**: Add seven-model FeatureGraph transfer report
+  ([#326](https://github.com/KhrulkovV/gigaevo-core-internal/pull/326),
+  [`97c4a08`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/97c4a08be1553b5a066e55dd92b931b6d620d86c))
+
+- **tabular**: Extend California transfer matrix with TabFM
+  ([`433f435`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/433f435d6e0e71346f7c79a88e3e59efef0cd244))
+
+### Features
+
+- Add TabM-backed DAG evaluator
+  ([#320](https://github.com/KhrulkovV/gigaevo-core-internal/pull/320),
+  [`f6085cd`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f6085cd0d6206aa455981ffc724cdc248608ee56))
+
+- **dag-tab**: Generalize and harden FeatureGraph evolution
+  ([#306](https://github.com/KhrulkovV/gigaevo-core-internal/pull/306),
+  [`0549ebc`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0549ebc1e1aef109943fe815bf2f806a3148f394))
+
+- **experiments**: Embedding-informed memory-v2 posterior harness
+  ([#319](https://github.com/KhrulkovV/gigaevo-core-internal/pull/319),
+  [`38d6f7c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/38d6f7c4e91b1681a7002f98d0390d7aad3a19c5))
+
+- **memory**: Add cross-task card transfer
+  ([#321](https://github.com/KhrulkovV/gigaevo-core-internal/pull/321),
+  [`884de12`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/884de1228dbeb43ab302ca71b354509e3d4d5a30))
+
+- **memory**: Ingest evaluator-reported uncertainty
+  ([`b9a2ad0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b9a2ad0da6efb336670ad69e88c5a9ab9f7640c2))
+
+- **memory**: Support evidence-only shared banks
+  ([#330](https://github.com/KhrulkovV/gigaevo-core-internal/pull/330),
+  [`3794af1`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3794af1d2aabfeceb4566a28482f8d35549464ff))
+
+- **memory-v2**: DRos optimistic-shrinkage knob on conditional-offer OPE
+  ([#319](https://github.com/KhrulkovV/gigaevo-core-internal/pull/319),
+  [`38d6f7c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/38d6f7c4e91b1681a7002f98d0390d7aad3a19c5))
+
+- **memory-v2**: Embedding-informed card prior + reward-head calibration diagnostic
+  ([#319](https://github.com/KhrulkovV/gigaevo-core-internal/pull/319),
+  [`38d6f7c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/38d6f7c4e91b1681a7002f98d0390d7aad3a19c5))
+
+- **memory-v2**: Embedding-informed card prior, reward calibration, exc_type logging fix
+  ([#319](https://github.com/KhrulkovV/gigaevo-core-internal/pull/319),
+  [`38d6f7c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/38d6f7c4e91b1681a7002f98d0390d7aad3a19c5))
+
+- **memory-v2**: Empirical-Bayes tuning of reward prior scales (item 3)
+  ([#319](https://github.com/KhrulkovV/gigaevo-core-internal/pull/319),
+  [`38d6f7c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/38d6f7c4e91b1681a7002f98d0390d7aad3a19c5))
+
+- **problem**: Add Moscow 10x5 counterexample search
+  ([`5132da0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5132da02dd72a702672a9814bd8980fb10f33559))
+
+- **problems**: Interface-ablation problem families + shared grading harness
+  ([`a7010a5`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a7010a543c8dd08a9bc011a5bc6ba313e1ff4bf6))
+
+- **tabular**: Add estimator-controlled DAG baselines
+  ([#324](https://github.com/KhrulkovV/gigaevo-core-internal/pull/324),
+  [`122f8cd`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/122f8cdba74e44ff44863f3c1b621c1d6275fd7e))
+
+- **tabular**: Add Higgs transfer study and universal TabM recipe
+  ([`70610a5`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/70610a5813b0738a6a164979160882d5f701ffc2))
+
+- **tabular**: Add TabArena protocol
+  ([`0bb6254`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0bb625472ec6569ce58e27a47090e76c341bfdf9))
+
+- **tabular**: Add TabFM FeatureGraph baseline
+  ([`1d581d8`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1d581d8391c466364f27a3eb2a4b9a9a483d6b4a))
+
+- **tabular**: Import TabReD datasets
+  ([`c3b792d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/c3b792d98f2ee735dfdaf678d705604e2c31e730))
+
+- **tabular**: Materialize TabArena problem suite
+  ([`f0acf6c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f0acf6c135f0408b1155f44b8345deec648171ee))
+
+### Performance Improvements
+
+- **memory**: Batch retrieval and scale Instruct routing
+  ([#332](https://github.com/KhrulkovV/gigaevo-core-internal/pull/332),
+  [`f1d4211`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f1d421152f64ea96986f2947d5a2ba6f5b497807))
+
+- **memory**: Batch retrieval query embeddings
+  ([#332](https://github.com/KhrulkovV/gigaevo-core-internal/pull/332),
+  [`f1d4211`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f1d421152f64ea96986f2947d5a2ba6f5b497807))
+
+### Refactoring
+
+- **aaai_submit**: Move interface-ablation families out of problems/
+  ([`98e1f5f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/98e1f5f78fd63dc549ac9a8f571d70e70303bc28))
+
+- **aaai_submit**: Move the interface-ablation bundle under problems/
+  ([`1de04da`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1de04da9af32efb5478a8889a449ae915a115709))
+
+- **llm**: Make Gemini 3.5 preset self-contained
+  ([`cb8d267`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/cb8d2678cf9f8922e34eaedc5f393605989266c4))
+
+- **tabular**: Compact task descriptions
+  ([`61557b4`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/61557b4f847743022c331f875071a2eca79c55a6))
+
+- **tabular**: Group dataset collections
+  ([`45dfeba`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/45dfeba562d662917b25cb21e7abe042c45460af))
+
+- **tabular**: Make task descriptions schema only
+  ([`a68d1db`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a68d1db05309bb02efd8587b4781b0b2765aa66a))
+
+- **tabular**: Remove task prompt guidance
+  ([`3b0d865`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3b0d8657bb2cb220740a41bea66ef0e61a847140))
+
+
 ## v2.14.0 (2026-07-18)
 
 ### Bug Fixes
