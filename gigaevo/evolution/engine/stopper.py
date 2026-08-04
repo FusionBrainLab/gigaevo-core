@@ -27,6 +27,13 @@ class StopDecision:
 
 @dataclass(frozen=True)
 class EngineThroughput:
+    """Observed mutant production rate.
+
+    ``mutants_per_second`` is measured over a recent window, while
+    ``elapsed_seconds`` is the run's total elapsed wall time — their
+    product is therefore not ``ctx.total_mutants``.
+    """
+
     mutants_per_second: float
     elapsed_seconds: float
 
@@ -164,14 +171,16 @@ class CompositeStopper(EvolutionStopper):
     ) -> tuple[float, str] | None:
         if not self.children:
             return None
-        bounded = [
-            est
-            for est in (c.estimate_remaining(ctx, tp) for c in self.children)
-            if est is not None
-        ]
+        estimates = [c.estimate_remaining(ctx, tp) for c in self.children]
+        bounded = [est for est in estimates if est is not None]
         if not bounded:
             return None
         if self.mode == "all":
+            # "all" runs until every child fires, so one unbounded child
+            # leaves the composite unbounded — the bounded children only
+            # give a lower bound. Same rule as remaining_dispatches().
+            if len(bounded) != len(estimates):
+                return None
             return max(bounded, key=lambda e: e[0])
         return min(bounded, key=lambda e: e[0])
 
