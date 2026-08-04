@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v2.15.1 (2026-08-04)
+
+### Bug Fixes
+
+- **monitoring**: Measure ETA throughput over a trailing window
+  ([`88729fb`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/88729fbeacc3edde56db0a95751362625e27002c))
+
+### Documentation
+
+- **plans**: Record the ETA audit resolution and the declined fixes
+  ([`08dc927`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/08dc927aeff7ce2f3f5458ad1ba9c8689cb0ab33))
+
+
 ## v2.15.0 (2026-08-04)
 
 ### Bug Fixes
