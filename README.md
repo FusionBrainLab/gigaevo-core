@@ -19,6 +19,7 @@ and supports single runs, multi-island evolution, and prompt co-evolution.
 - **[Architecture Guide](docs/ARCHITECTURE.md)** — System design overview
 - **[Generic tabular FeatureGraph evolution](problems/dag_tab/README.md)** — Evolve dataset-parameterized JSON feature DAGs with fixed CatBoost evaluation
 - **[Tabular DAG estimator baselines](problems/tabular_dag_baselines/README.md)** — Evolve or cross-evaluate the same FeatureGraphs with CatBoost, TabM, RealMLP, TabICLv2, TabPFN v3, TabFM 1.0, LightGBM, or XGBoost
+- **[Interface-ablation arms](aaai_submit/README.md)** — Fourteen ACI / hexagon / spherical-code families on one frozen grading harness; kept outside `problems/` as a study bundle
 
 ## Documentation
 
@@ -59,7 +60,7 @@ on firewalled/slow networks. Pick the install level that matches your use:
 | Chain/prompt problems: HoVer, HotpotQA, IFBench, gsm8k, musique, papillon, pupa | `[chains]` |
 | Optuna / CMA optimization stages | `[optimization]` |
 | Alphaevolve / hexagon_improver / santa2025 problems (JAX, sympy, shapely) | `[optimization]` |
-| `hex*` / `aci*` / `spherical_*` arms and their `problems/_harness` (JAX seeds) | `[optimization]` |
+| `aaai_submit/` interface-ablation arms and their `_harness` (JAX seeds) | `[optimization]` |
 | W&B / TensorBoard tracker backends | `[tracking]` |
 | TabM FeatureGraph evaluator | `[tabm-eval]` |
 | GAM memory **platform** backend (`use_api=True`) — local backend needs nothing | `[memory-platform]` |

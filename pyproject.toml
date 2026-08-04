@@ -172,8 +172,8 @@ target-version = "py311"
 exclude = [
     ".claude/worktrees",
     "experiments/*/top_programs_*",
-    "problems/hex26_adapt/initial_programs",
-    "problems/aci_improve_warm/initial_programs",
+    "aaai_submit/hex26_adapt/initial_programs",
+    "aaai_submit/aci_improve_warm/initial_programs",
 ]
 
 [tool.ruff.lint]
