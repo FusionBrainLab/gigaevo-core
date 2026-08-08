@@ -14,7 +14,7 @@ from enum import Enum
 import math
 from typing import TYPE_CHECKING, Any
 
-from langchain_openai import ChatOpenAI
+from langchain_core.language_models.chat_models import BaseChatModel
 from loguru import logger
 import numpy as np
 
@@ -233,7 +233,7 @@ class BanditModelRouter(MultiModelRouter):
 
     def __init__(
         self,
-        models: list[ChatOpenAI],
+        models: list[BaseChatModel],
         probabilities: list[float],
         *,
         writer: LogWriter | None = None,
@@ -262,7 +262,7 @@ class BanditModelRouter(MultiModelRouter):
 
     # -- selection ----------------------------------------------------------
 
-    def _select(self) -> tuple[ChatOpenAI, str]:
+    def _select(self) -> tuple[BaseChatModel, str]:
         """Select a model via UCB1 and record the pull."""
         name = self._bandit.select()
         self._bandit.record_pull(name)

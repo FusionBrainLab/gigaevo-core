@@ -149,6 +149,15 @@ def _resolve_run_overrides(m, run) -> dict:
     return merged
 
 
+def _is_http_endpoint(url: str) -> bool:
+    """Whether ``url`` names something with an OpenAI-compatible /models route.
+
+    Non-HTTP backends still set ``llm_base_url`` — it is half the memory
+    fingerprint — but they answer over a subprocess, not a socket.
+    """
+    return url.startswith(("http://", "https://"))
+
+
 def _check_llm_reachable(results: list[CheckResult], m) -> None:
     """Probe ``{merged.llm_base_url}/models`` for each run.
 
@@ -160,11 +169,13 @@ def _check_llm_reachable(results: list[CheckResult], m) -> None:
     try:
         issues: list[str] = []
         all_urls: set[str] = set()
+        local: set[str] = set()
         for run in m.contract.runs:
             merged = _resolve_run_overrides(m, run)
             url = merged.get("llm_base_url")
-            if url:
-                all_urls.add(str(url))
+            if not url:
+                continue
+            (all_urls if _is_http_endpoint(str(url)) else local).add(str(url))
         api_key = (m.contract.custom_env or {}).get("OPENAI_API_KEY", "None")
         for url in sorted(all_urls):
             try:
@@ -179,6 +190,11 @@ def _check_llm_reachable(results: list[CheckResult], m) -> None:
             c.fail(
                 "; ".join(issues)
                 + " (if behind a corporate proxy, check HTTPS_PROXY/NO_PROXY in your shell/.env)"
+            )
+        elif local:
+            c.ok(
+                f"{len(all_urls)} endpoint(s) reachable; not probed (non-HTTP "
+                f"backend): {', '.join(sorted(local))}"
             )
         elif not all_urls:
             c.ok("no llm_base_url set — skipping")
@@ -202,6 +218,10 @@ def _check_model_ids(results: list[CheckResult], m) -> None:
             if not url or not model_name:
                 continue
             url = str(url)
+            if not _is_http_endpoint(url):
+                # The model id is the harness command's identity, not a server
+                # catalogue entry; there is nothing to check it against.
+                continue
             if url not in cache:
                 try:
                     req = Request(

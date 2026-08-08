@@ -25,8 +25,8 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from loguru import logger
 
 from gigaevo.evolution.mutation.context import EvolutionaryStatisticsMutationContext
@@ -82,7 +82,7 @@ class MutationSuggestionAgent(LangGraphAgent):
 
     def __init__(
         self,
-        llm: ChatOpenAI | MultiModelRouter,
+        llm: BaseChatModel | MultiModelRouter,
         system_prompt: str,
         user_prompt_template: str,
         max_insights: int,

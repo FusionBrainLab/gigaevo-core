@@ -37,7 +37,9 @@ from gigaevo.utils.trackers.base import LogWriter
 class TaskInfo(NamedTuple):
     task: asyncio.Task
     program_id: str
-    started_at: float
+    #: Stamped when the task acquires the concurrency semaphore. ``None`` while
+    #: the task is still queued, so dag_timeout measures execution only.
+    started_at: float | None = None
 
 
 class DagRunnerMetrics(BaseModel):
@@ -288,7 +290,10 @@ class DagRunner:
         for info in list(self._active.values()):
             if info.task.done():
                 finished.append(info)
-            elif (now - info.started_at) > self._config.dag_timeout:
+            elif (
+                info.started_at is not None
+                and (now - info.started_at) > self._config.dag_timeout
+            ):
                 timed_out.append(info)
 
         for info in timed_out:
@@ -458,10 +463,15 @@ class DagRunner:
 
             async def _run_one(prog: Program = program, dag_inst: DAG = dag) -> None:
                 async with self._sema:
+                    info = self._active.get(prog.id)
+                    if info is not None:
+                        self._active[prog.id] = info._replace(
+                            started_at=time.monotonic()
+                        )
                     await self._execute_dag(dag_inst, prog)
 
             task = asyncio.create_task(_run_one(), name=f"dag-{program.short_id}")
-            self._active[program.id] = TaskInfo(task, program.id, time.monotonic())
+            self._active[program.id] = TaskInfo(task, program.id)
             launched.append(program)
 
         # Batch transition QUEUED → RUNNING (3 RT instead of 2N RT)

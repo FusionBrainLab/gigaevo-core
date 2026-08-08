@@ -7,8 +7,8 @@ import time
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 import diffpatch
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -239,7 +239,7 @@ class MutationAgent(LangGraphAgent):
 
     def __init__(
         self,
-        llm: ChatOpenAI | MultiModelRouter,
+        llm: BaseChatModel | MultiModelRouter,
         system_prompt: str,
         user_prompt_template: str,
         mutation_mode: str = "rewrite",

@@ -9,8 +9,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Literal, TypedDict
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from gigaevo.llm.agents.base import LangGraphAgent
@@ -232,7 +232,7 @@ class InsightsAgent(LangGraphAgent):
 
     def __init__(
         self,
-        llm: ChatOpenAI | MultiModelRouter,
+        llm: BaseChatModel | MultiModelRouter,
         system_prompt_template: str,
         user_prompt_template: str,
         max_insights: int,

@@ -421,6 +421,105 @@ class TestDagRunnerLaunch:
 
 
 # ---------------------------------------------------------------------------
+# TestDagRunnerStartedAt
+# ---------------------------------------------------------------------------
+
+
+class TestDagRunnerStartedAt:
+    async def test_started_at_stamped_on_semaphore_acquire(self):
+        """started_at marks execution start, not task creation.
+
+        Prefetch creates max_concurrent_dags * prefetch_factor tasks, so most of
+        them sit on the semaphore. Stamping at creation makes _maintain reap
+        programs for exceeding dag_timeout while they were only ever queued.
+        """
+        progs = [_make_test_program(state=ProgramState.QUEUED) for _ in range(2)]
+        storage = _make_mock_storage()
+        storage.get_ids_by_status = AsyncMock(
+            side_effect=lambda s: (
+                [p.id for p in progs] if s == ProgramState.QUEUED.value else []
+            )
+        )
+        storage.mget = AsyncMock(return_value=progs)
+
+        blueprint = MagicMock()
+        blueprint.build = MagicMock(side_effect=lambda *a, **kw: _make_mock_dag())
+
+        runner = _make_runner(
+            storage=storage,
+            dag_blueprint=blueprint,
+            config=DagRunnerConfig(max_concurrent_dags=1),
+        )
+
+        release = asyncio.Event()
+
+        async def _blocked_execute(dag, prog):
+            await release.wait()
+
+        runner._execute_dag = _blocked_execute
+
+        await runner._launch()
+        assert len(runner._active) == 2
+
+        # One task holds the only semaphore slot; the other is queued behind it.
+        await asyncio.sleep(0.05)
+        before_release = time.monotonic()
+        release.set()
+        await asyncio.sleep(0.05)
+
+        stamps = sorted(info.started_at for info in runner._active.values())
+        assert stamps[0] < before_release
+        assert stamps[1] >= before_release
+
+        for info in runner._active.values():
+            info.task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await info.task
+
+    async def test_queued_dag_not_reaped_as_timed_out(self):
+        """A DAG parked on the semaphore is never discarded for dag_timeout."""
+        progs = [_make_test_program(state=ProgramState.QUEUED) for _ in range(2)]
+        storage = _make_mock_storage()
+        storage.get_ids_by_status = AsyncMock(
+            side_effect=lambda s: (
+                [p.id for p in progs] if s == ProgramState.QUEUED.value else []
+            )
+        )
+        storage.mget = AsyncMock(return_value=progs)
+
+        blueprint = MagicMock()
+        blueprint.build = MagicMock(side_effect=lambda *a, **kw: _make_mock_dag())
+
+        runner = _make_runner(
+            storage=storage,
+            dag_blueprint=blueprint,
+            config=DagRunnerConfig(max_concurrent_dags=1, dag_timeout=1),
+        )
+
+        release = asyncio.Event()
+
+        async def _blocked_execute(dag, prog):
+            await release.wait()
+
+        runner._execute_dag = _blocked_execute
+
+        await runner._launch()
+        assert len(runner._active) == 2
+        await asyncio.sleep(1.05)
+
+        await runner._maintain()
+
+        # The executing DAG legitimately timed out; the queued one must survive.
+        assert len(runner._active) == 1
+
+        release.set()
+        for info in list(runner._active.values()):
+            info.task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await info.task
+
+
+# ---------------------------------------------------------------------------
 # TestDagRunnerMaintain
 # ---------------------------------------------------------------------------
 

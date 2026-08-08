@@ -543,6 +543,7 @@ Assembly is pure YAML — a flat `${ref:}` graph in `config/memory/v2.yaml` (no 
 | `gigaevo/database/redis/keys.py` | Redis key templates |
 | `gigaevo/entrypoint/lineage_memory_pipeline.py` | `GuidedMutationPipelineBuilder` and `MemoryGuidedMutationPipelineBuilder` |
 | `gigaevo/llm/agents/mutation.py` | LLM mutation agent |
+| `gigaevo/llm/harness.py` | `HarnessChat` — an agentic coding CLI as the LLM backend; see [USAGE.md](USAGE.md#agentic-coding-harness-backend) |
 | `gigaevo/evolution/mutation/structured_diff.py` | `StructuredDiffMutationOperator` (schema-constrained diff mutation) |
 | `gigaevo/evolution/mutation/allowed_changes.py` | `AllowedChanges` contract (genome-family diff vocabularies) |
 | `gigaevo/chains/dag_changes.py` | `AllowedDagChanges` (CARL chain positional-slot diffs, LLM steps) |

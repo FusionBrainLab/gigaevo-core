@@ -3,12 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from loguru import logger
 
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.llm.agents.factories import create_lineage_agent
 from gigaevo.llm.agents.lineage import TransitionAnalysis
-from gigaevo.llm.models import ChatOpenAI, MultiModelRouter
+from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.core_types import (
     ProgramStageResult,
     StageIO,
@@ -51,7 +52,7 @@ class LineageStage(LangGraphStage):
     def __init__(
         self,
         *,
-        llm: ChatOpenAI | MultiModelRouter,
+        llm: BaseChatModel | MultiModelRouter,
         task_description: str,
         metrics_context: MetricsContext,
         storage: ProgramStorage,

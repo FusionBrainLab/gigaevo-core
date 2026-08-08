@@ -7,8 +7,8 @@ ALL LLM-related logic lives here - stages are just thin wrappers.
 import difflib
 from typing import TypedDict
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.llm.agents.base import LangGraphAgent
@@ -105,7 +105,7 @@ class LineageAgent(LangGraphAgent):
 
     def __init__(
         self,
-        llm: ChatOpenAI | MultiModelRouter,
+        llm: BaseChatModel | MultiModelRouter,
         system_prompt: str,
         user_prompt_template: str,
         task_description: str,

@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from langchain_openai import ChatOpenAI
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from gigaevo.llm.agents.factories import create_insights_agent
 from gigaevo.llm.agents.insights import ProgramInsights
@@ -41,7 +41,7 @@ class InsightsStage(LangGraphStage):
     def __init__(
         self,
         *,
-        llm: ChatOpenAI | MultiModelRouter,
+        llm: BaseChatModel | MultiModelRouter,
         task_description: str,
         metrics_context: MetricsContext,
         max_insights: int = 5,

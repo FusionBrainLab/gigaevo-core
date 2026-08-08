@@ -1,0 +1,63 @@
+# @package _global_
+# Codex-CLI harness backend (`codex exec`). Same HarnessChat as
+# config/llm/harness.yaml, different wire shape: codex's schema flag wants a
+# file path, and its answer channel is a file the CLI writes itself. See
+# docs/USAGE.md for the full contract.
+
+model_name: codex/gpt-5.6-luna
+llm_base_url: harness://codex
+
+llm_max_concurrent: 4
+prefetch_factor: 1
+
+llm:
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  structured_output_method: json_schema
+  models:
+    - _target_: gigaevo.llm.harness.HarnessChat
+      model_name: ${model_name}
+      request_timeout: ${request_timeout}
+      prompts_dir: ${prompts.dir}
+      # --output-schema takes a FILE, not schema text: schema_as_path points
+      # it at the workspace SCHEMA.json that is written anyway.
+      schema_flag: --output-schema
+      schema_as_path: true
+      # codex writes its final schema-conformant message into this file
+      # mechanically -- the answer channel, replacing both the OUTPUT.json
+      # handshake and claude's stdout envelope. Its own stdout is a JSONL
+      # event stream (--json below), mined for per-turn usage counts.
+      answer_file_flag: --output-last-message
+      # codex hands --output-schema to OpenAI STRICT structured output, which
+      # rejects any schema whose objects are not closed and fully required:
+      # rewrite on the way out, strip the invited nulls on the way back.
+      strict_schema: true
+      # No --append-system-prompt equivalent exists, and codex's sandboxed
+      # file reads flake (the first shell command intermittently fails, and
+      # the model then answers a schema-VALID fallback — silent garbage, not
+      # an error). stdin_prompts sidesteps both: the whole prompt travels on
+      # stdin and no tool runs at all. --sandbox read-only then only fences
+      # anything the model tries anyway; the CLI's own --output-last-message
+      # write is not sandboxed. --ephemeral keeps per-call session files off
+      # disk, --skip-git-repo-check because the workspace is a bare temp
+      # directory. model_reasoning_effort is pinned: the operator's
+      # ~/.codex/config.toml sets its own and a run must not silently
+      # inherit it. The file itself stays inherited on purpose — it is where
+      # codex keeps its login and any proxy it needs — so pin any other key
+      # a run must not absorb the same way, with -c on the command line.
+      stdin_prompts: true
+      command:
+        - codex
+        - exec
+        - --model
+        - gpt-5.6-luna
+        - -c
+        - model_reasoning_effort="medium"
+        - --sandbox
+        - read-only
+        - --ephemeral
+        - --skip-git-repo-check
+        - --json
+  probabilities: [1.0]
+  writer: ${ref:writer}
+  max_concurrent: ${llm_max_concurrent}

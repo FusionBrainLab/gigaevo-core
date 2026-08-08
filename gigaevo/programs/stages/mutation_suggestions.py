@@ -47,7 +47,7 @@ import re
 from typing import Any, cast
 
 import cloudpickle
-from langchain_openai import ChatOpenAI
+from langchain_core.language_models.chat_models import BaseChatModel
 from loguru import logger
 
 from gigaevo.database.program_storage import ProgramStorage
@@ -174,7 +174,7 @@ class MutationSuggestionStage(LangGraphStage):
     def __init__(
         self,
         *,
-        llm: ChatOpenAI | MultiModelRouter,
+        llm: BaseChatModel | MultiModelRouter,
         storage: ProgramStorage,
         metrics_context: MetricsContext,
         task_description: str,

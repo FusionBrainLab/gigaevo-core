@@ -66,6 +66,65 @@ class TestPromptIODumpHandler:
         assert rec["usage"]["total_tokens"] == 15
         assert rec["error"] is None
 
+    def test_a_lone_surrogate_does_not_drop_the_record(self, tmp_path: Path) -> None:
+        """A model truncating a surrogate pair must not cost the audit record.
+
+        ``json.loads`` accepts the escape, so the character reaches the message
+        content intact -- and then strict UTF-8 cannot write it back out. The
+        callback machinery swallows the error, so the one call that produced
+        the odd text is precisely the one missing from the dump.
+        """
+        handler = PromptIODumpHandler(dump_dir=tmp_path, router_name="mutation")
+        rid = uuid4()
+        handler.on_chat_model_start(
+            {}, [[HumanMessage(content="ask \ud800 me")]], run_id=rid
+        )
+        handler.on_llm_end(_result("answer \udfff here"), run_id=rid)
+
+        records = _read_records(tmp_path / "mutation.jsonl")
+        assert len(records) == 1
+        assert records[0]["prompt"][0]["content"] == "ask \ud800 me"
+        assert records[0]["response"] == "answer \udfff here"
+
+    def test_adjacent_surrogates_that_pair_are_normalized_not_dropped(
+        self, tmp_path: Path
+    ) -> None:
+        """The one input the round-trip does not preserve exactly.
+
+        A server splitting an astral character across two SSE chunks yields
+        two *lone* surrogates side by side. Written as neighbouring escapes,
+        ``json.loads`` recombines them into the character they encode, so the
+        record normalizes: twelve characters in, eleven out. Pinned because
+        the alternative is not a faithful record but no record at all -- and
+        because a reader diffing the dump against memory needs to know.
+        """
+        handler = PromptIODumpHandler(dump_dir=tmp_path, router_name="mutation")
+        rid = uuid4()
+        split = "see \ud83d\ude00 emoji"
+        assert len(split) == 12
+        handler.on_chat_model_start({}, [[HumanMessage(content=split)]], run_id=rid)
+        handler.on_llm_end(_result("ok"), run_id=rid)
+
+        content = _read_records(tmp_path / "mutation.jsonl")[0]["prompt"][0]["content"]
+        assert content == "see \U0001f600 emoji"
+        assert len(content) == 11
+
+    def test_error_path_survives_a_lone_surrogate(self, tmp_path: Path) -> None:
+        """``_write`` is shared, and the error path is the other way in.
+
+        ``raise_error = False`` swallows the encode failure on both call
+        sites, so an exception message quoting the odd text loses its record
+        just as silently as a response would.
+        """
+        handler = PromptIODumpHandler(dump_dir=tmp_path, router_name="mutation")
+        rid = uuid4()
+        handler.on_chat_model_start({}, [[HumanMessage(content="Q")]], run_id=rid)
+        handler.on_llm_error(ValueError("bad token \ud800 here"), run_id=rid)
+
+        records = _read_records(tmp_path / "mutation.jsonl")
+        assert len(records) == 1
+        assert records[0]["error"] == "ValueError: bad token \ud800 here"
+
     def test_error_path_writes_record(self, tmp_path: Path) -> None:
         handler = PromptIODumpHandler(dump_dir=tmp_path, router_name="mem")
         rid = uuid4()

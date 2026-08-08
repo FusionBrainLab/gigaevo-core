@@ -166,6 +166,117 @@ class TestPerStageAttribution:
         assert observed == {"A": "A", "B": "B"}
 
 
+def _harness_response(cost: float = 0.0125, turns: int = 4) -> MagicMock:
+    """A harness message: token counts plus the cost and turn count only the
+    CLI itself knows."""
+    resp = _mock_response()
+    resp.response_metadata["total_cost_usd"] = cost
+    resp.response_metadata["num_turns"] = turns
+    return resp
+
+
+class TestCostAndTurns:
+    """Cost and turn count must reach the durable metrics, not die on the
+    message: turn count is the dominant cost variable of a harness backend,
+    and total_cost_usd cannot be reconstructed from token counts."""
+
+    def test_from_response_reads_cost_and_turns(self) -> None:
+        usage = TokenUsage.from_response(_harness_response(cost=0.0125, turns=4))
+
+        assert usage is not None
+        assert usage.cost_usd == 0.0125
+        assert usage.turns == 4
+
+    def test_api_responses_leave_them_none(self) -> None:
+        usage = TokenUsage.from_response(_mock_response())
+
+        assert usage is not None
+        assert usage.cost_usd is None
+        assert usage.turns is None
+
+    def test_nonsense_values_are_discarded(self) -> None:
+        resp = _mock_response()
+        resp.response_metadata["total_cost_usd"] = "free"
+        resp.response_metadata["num_turns"] = True
+
+        usage = TokenUsage.from_response(resp)
+
+        assert usage is not None
+        assert usage.cost_usd is None
+        assert usage.turns is None
+
+    def test_degenerate_costs_are_discarded(self) -> None:
+        """A negative or non-finite cost skews the cumulative forever — NaN
+        poisons every sum after it — and json.loads happily produces all
+        three."""
+        for cost in (-0.01, float("nan"), float("inf")):
+            resp = _mock_response()
+            resp.response_metadata["total_cost_usd"] = cost
+
+            usage = TokenUsage.from_response(resp)
+
+            assert usage is not None
+            assert usage.cost_usd is None
+
+    def test_a_turn_count_beyond_float_range_is_discarded(self) -> None:
+        """json accepts integers float() cannot represent; the writer emits
+        floats, so keeping one turns a served call into a crashed metric
+        write."""
+        resp = _mock_response()
+        resp.response_metadata["num_turns"] = 10**400
+
+        usage = TokenUsage.from_response(resp)
+
+        assert usage is not None
+        assert usage.turns is None
+        tracker = TokenTracker(name="default", writer=_RecordingWriter())
+        tracker.track(resp, "model_a")
+
+    def test_tracker_accumulates_and_writes_scalars(self) -> None:
+        writer = _RecordingWriter()
+        tracker = TokenTracker(name="default", writer=writer)
+
+        with llm_stage_context("MutationAgent"):
+            tracker.track(_harness_response(cost=0.01, turns=4), "claude-code/sonnet")
+            tracker.track(_harness_response(cost=0.02, turns=6), "claude-code/sonnet")
+
+        cum = tracker.cumulative["claude-code/sonnet"]
+        assert cum.cost_usd == pytest.approx(0.03)
+        assert cum.turns == 10
+        stage_cum = tracker.cumulative_by_stage[("MutationAgent", "claude-code/sonnet")]
+        assert stage_cum.cost_usd == pytest.approx(0.03)
+        assert stage_cum.turns == 10
+
+        metrics = {m for m, _, _ in writer.calls}
+        assert {
+            "cost_usd",
+            "cumulative_cost_usd",
+            "num_turns",
+            "cumulative_num_turns",
+        } <= metrics
+        last_cumulative_cost = [
+            v for m, v, _ in writer.calls if m == "cumulative_cost_usd"
+        ][-1]
+        assert last_cumulative_cost == pytest.approx(0.03)
+        # The per-stage panel carries them too.
+        stage_paths = {
+            p for m, _, p in writer.calls if m == "num_turns" and "MutationAgent" in p
+        }
+        assert ("default", "MutationAgent", "claude-code_sonnet") in stage_paths
+
+    def test_api_responses_emit_no_cost_scalars(self) -> None:
+        """An API model reports no cost or turns; zero-filled series for every
+        OpenAI call would bury the harness series they exist to monitor."""
+        writer = _RecordingWriter()
+        tracker = TokenTracker(name="default", writer=writer)
+
+        tracker.track(_mock_response(), "model_a")
+
+        metrics = {m for m, _, _ in writer.calls}
+        assert "cost_usd" not in metrics
+        assert "num_turns" not in metrics
+
+
 class TestTokenUsageStaticAdd:
     """Sanity check that the per-stage bucket aggregates the same way
     as the legacy bucket — no surprise rounding or off-by-one."""

@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from langchain_openai import ChatOpenAI
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from gigaevo.llm.agents.admission_novelty import NoveltyAdmissionAgent
 from gigaevo.llm.agents.card_author import CardAuthorAgent
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 
 
 def create_mutation_agent(
-    llm: ChatOpenAI | MultiModelRouter,
+    llm: BaseChatModel | MultiModelRouter,
     task_description: str,
     metrics_context: MetricsContext,
     mutation_mode: str = "rewrite",
@@ -121,7 +121,7 @@ def create_mutation_agent(
 
 
 def create_insights_agent(
-    llm: ChatOpenAI | MultiModelRouter,
+    llm: BaseChatModel | MultiModelRouter,
     task_description: str,
     metrics_context: MetricsContext,
     max_insights: int = 5,
@@ -176,7 +176,7 @@ def create_insights_agent(
 
 
 def create_mutation_suggestion_agent(
-    llm: ChatOpenAI | MultiModelRouter,
+    llm: BaseChatModel | MultiModelRouter,
     task_description: str,
     metrics_context: MetricsContext,
     max_insights: int = 5,
@@ -221,7 +221,7 @@ def create_mutation_suggestion_agent(
 
 
 def create_lineage_agent(
-    llm: ChatOpenAI | MultiModelRouter,
+    llm: BaseChatModel | MultiModelRouter,
     task_description: str,
     metrics_context: MetricsContext,
     prompts_dir: str | Path | None = None,
@@ -268,7 +268,7 @@ def create_lineage_agent(
 
 
 def create_card_author_agent(
-    llm: ChatOpenAI | MultiModelRouter,
+    llm: BaseChatModel | MultiModelRouter,
     task_description: str,
     metrics_description: str,
     fitness_key: str,
@@ -290,7 +290,7 @@ def create_card_author_agent(
 
 
 def create_novelty_admission_agent(
-    llm: ChatOpenAI | MultiModelRouter,
+    llm: BaseChatModel | MultiModelRouter,
     task_description: str,
     prompts_dir: str | Path | None = None,
 ) -> NoveltyAdmissionAgent:
@@ -320,7 +320,7 @@ def create_novelty_admission_agent(
 
 
 def create_equivalence_agent(
-    llm: ChatOpenAI | MultiModelRouter,
+    llm: BaseChatModel | MultiModelRouter,
     task_description: str,
     prompts_dir: str | Path | None = None,
 ) -> EquivalenceAgent:
@@ -336,7 +336,7 @@ def create_equivalence_agent(
 
 
 def create_program_author_agent(
-    llm: ChatOpenAI | MultiModelRouter,
+    llm: BaseChatModel | MultiModelRouter,
     task_description: str,
     metrics_description: str,
     prompts_dir: str | Path | None = None,
@@ -367,7 +367,7 @@ def create_program_author_agent(
 
 
 def create_task_summary_agent(
-    llm: ChatOpenAI | MultiModelRouter,
+    llm: BaseChatModel | MultiModelRouter,
     prompts_dir: str | Path | None = None,
 ) -> TaskSummaryAgent:
     """Create the librarian's task-summary agent (one-line condensation).

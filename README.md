@@ -208,6 +208,29 @@ python run.py problem.name=chains/hover/full7 program_format=json_document
 Use `python run.py ... --cfg job` to inspect the exact resolved config before
 spending LLM budget.
 
+### Harness-Based Evolution (agentic coding CLIs)
+
+Instead of an HTTP endpoint, the LLM backend can be an agentic coding CLI —
+the harness's subscription then pays for mutations instead of API tokens:
+
+```bash
+# Claude Code as the mutation engine. The shipped config gives the harness its
+# own state dir, so log in to it once first:
+#   CLAUDE_CONFIG_DIR=~/.cache/gigaevo/harness-state claude   (then /login)
+python run.py problem.name=heilbron llm=harness
+
+# Codex CLI with a cheap model (needs `codex` on PATH, logged in)
+python run.py problem.name=heilbron llm=codex
+```
+
+The CLI is driven headless, one process per call, with structured output,
+per-call audit workspaces (`SYSTEM.md`, `USER.md`, `STDOUT.log`, …), token and
+cost accounting, and tool/egress containment. `config/llm/harness.yaml`
+(Claude Code) and `config/llm/codex.yaml` (Codex) are pre-wired; adapting
+another CLI is a config-only exercise. See
+[docs/USAGE.md](docs/USAGE.md#agentic-coding-harness-backend) for the full
+contract and every knob.
+
 ## How It Works
 
 1. **Load initial programs** from `problems/<name>/initial_programs/`
