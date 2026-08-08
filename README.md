@@ -214,7 +214,9 @@ Instead of an HTTP endpoint, the LLM backend can be an agentic coding CLI —
 the harness's subscription then pays for mutations instead of API tokens:
 
 ```bash
-# Claude Code as the mutation engine (needs `claude` on PATH, logged in)
+# Claude Code as the mutation engine. The shipped config gives the harness its
+# own state dir, so log in to it once first:
+#   CLAUDE_CONFIG_DIR=~/.cache/gigaevo/harness-state claude   (then /login)
 python run.py problem.name=heilbron llm=harness
 
 # Codex CLI with a cheap model (needs `codex` on PATH, logged in)

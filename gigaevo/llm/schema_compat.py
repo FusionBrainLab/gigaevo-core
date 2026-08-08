@@ -101,11 +101,26 @@ def strict_json_schema(schema: dict) -> dict:
     convention is nullability, so originally-optional properties gain a
     ``null`` branch (appended to an existing ``anyOf``, else wrapped in one).
     ``strip_strict_nulls`` is the answer-side inverse.
+
+    Two shapes cannot round-trip and are REFUSED with ValueError instead of
+    silently corrupted: map-shaped objects (no ``properties``, or a
+    schema-valued ``additionalProperties`` — closing them forbids every key),
+    and non-nullable optional properties inside an ``anyOf``/``oneOf``/``allOf``
+    branch (the strip side never recurses into unions, so the invited nulls
+    would reach validation).
     """
+    _reject_unstrippable_unions(schema)
 
     def strictify(node: dict) -> dict:
         if "properties" not in node and node.get("type") != "object":
             return node
+        if "properties" not in node or isinstance(
+            node.get("additionalProperties"), dict
+        ):
+            raise ValueError(
+                "strict mode cannot express a map-shaped object: closing it "
+                "would forbid every key; model the map as explicit properties"
+            )
         node = dict(node)
         props = node.get("properties", {})
         required = set(node.get("required", []))
@@ -118,6 +133,37 @@ def strict_json_schema(schema: dict) -> dict:
         return node
 
     return _map_schema_nodes(schema, strictify)
+
+
+def _reject_unstrippable_unions(node: Any, in_union: bool = False) -> None:
+    if isinstance(node, dict):
+        props = node.get("properties")
+        if in_union and isinstance(props, dict):
+            required = set(node.get("required", []))
+            stuck = [
+                key
+                for key, prop in props.items()
+                if key not in required
+                and not (isinstance(prop, dict) and _nullable(prop))
+            ]
+            if stuck:
+                raise ValueError(
+                    f"strict mode cannot round-trip optional properties {stuck} "
+                    "inside a union branch: strip_strict_nulls never recurses "
+                    "into unions, so the invited nulls would reach validation; "
+                    "make the branch's fields required or nullable"
+                )
+        for key, value in node.items():
+            if key == "properties" and isinstance(value, dict):
+                for prop in value.values():
+                    _reject_unstrippable_unions(prop, in_union)
+            else:
+                _reject_unstrippable_unions(
+                    value, in_union or key in ("anyOf", "oneOf", "allOf")
+                )
+    elif isinstance(node, list):
+        for item in node:
+            _reject_unstrippable_unions(item, in_union)
 
 
 def strip_strict_nulls(payload: Any, schema: dict) -> Any:

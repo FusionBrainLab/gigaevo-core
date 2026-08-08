@@ -127,13 +127,28 @@ python run.py problem.name=toy_example llm=codex
 
 `config/llm/harness.yaml` is `claude -p`; `config/llm/codex.yaml` is
 `codex exec` on `gpt-5.6-luna`. Any other CLI is a `command` override plus
-whichever of the knobs below its flags support.
+whichever of the knobs below its flags support — realistically, copy one of
+those files into a new `config/llm/` group. The model itself rides inside
+`command` (with `model_name` as the router's label for it), so changing it from
+the CLI means indexing into that list — `'llm.models.0.command.5=claude-opus-5'`
+for `llm=harness`, `'llm.models.0.command.3=gpt-5.6-terra'` for `llm=codex` —
+and changing `model_name` with it.
+
+**Log the harness in first.** `config/llm/harness.yaml` points
+`CLAUDE_CONFIG_DIR` at `~/.cache/gigaevo/harness-state`, so the subprocess does
+not see a login done under your default config dir. One-time setup: run
+`CLAUDE_CONFIG_DIR=~/.cache/gigaevo/harness-state claude` and `/login`; the
+state survives across runs from then on. Mind `ANTHROPIC_API_KEY`: if it is in
+the inherited environment, the CLI quietly bills the API with it instead of the
+subscription login — unset it for the run if the subscription paying is the
+point. (`codex exec` keeps its login in `~/.codex/`, which the shipped config
+deliberately inherits — see the hermeticity note below.)
 
 **The memory LLM is separate.** The memory config groups bind their agents to
 their own router (`memory.llm`), which is an HTTP model and stays one — so
 `llm=harness` with `memory=v2` or `memory=full` still needs `OPENROUTER_API_KEY`
-and reachable network for the insight and card agents. Add `memory=none` for a
-run that uses no HTTP endpoint at all.
+and reachable network for the insight and card agents. Add
+`pipeline=guided memory=none` for a run that uses no HTTP endpoint at all.
 
 **The workspace contract.** There is no per-harness adapter code. Every call
 gets a fresh directory, which is also the harness's working directory:
@@ -183,9 +198,10 @@ rides that flag, the user text goes to stdin verbatim, and no instruction is
 sent at all, so the harness answers the prompt instead of reading files about
 it. A call with no system text omits the flag rather than passing it empty.
 The workspace files are still written — they stay the audit record — but
-nothing directs the harness at them. This requires `schema_flag` and
-`answer_key`: with the stdin instruction gone, the stdout envelope is the only
-answer channel left. Mind the command-line limit — a system prompt is one argv
+nothing directs the harness at them. This requires `schema_flag`, and with it
+an answer channel: once the stdin instruction is gone, nothing would tell the
+harness to write `OUTPUT.json`, so the native channel is the only way the
+answer comes back. Mind the command-line limit — a system prompt is one argv
 argument, and a kernel-refused exec surfaces as the usual `cannot start`
 infrastructure failure. That argument is also visible to every process on the
 box while the call runs (`ps`, `/proc/<pid>/cmdline`), unlike the `0700`
@@ -210,7 +226,10 @@ codex hands the schema to OpenAI *strict* structured output, which rejects
 any schema whose objects are not closed and fully required — set
 `strict_schema: true` and the backend rewrites the wire schema (optionals
 become nullable) and strips the invited nulls from the answer, so pydantic
-defaults apply as usual. And `codex exec` has no `--append-system-prompt`
+defaults apply as usual. Two schema shapes cannot make that round trip —
+map-shaped objects (dict-valued fields) and non-nullable optionals inside a
+union branch — and the rewrite refuses them with a loud `ValueError` at call
+time rather than corrupting the answer silently. And `codex exec` has no `--append-system-prompt`
 equivalent while its sandboxed file reads flake — the first shell command
 intermittently fails, after which the model returns a schema-valid *fallback*
 answer rather than an error — so set `stdin_prompts: true`: the whole prompt
@@ -226,6 +245,12 @@ unchanged. Infrastructure failures (a full disk, a binary that vanished) raise
 as failed mutations like any other error, so grep for that string before
 reading a spike in invalid programs as a result.
 
+Constructing the router also runs a **preflight**: one real, billed harness
+call per configured model, so a missing binary, a logged-out state dir or a
+misspelled flag fails at startup with the CLI's own stderr quoted, instead of
+minutes later as the first mutation. It is bounded by `request_timeout` like
+any other call.
+
 `request_timeout` bounds each call. When it fires — and when a call is
 cancelled, and when it simply finishes — the whole process group is killed, not
 just the leader, since harnesses spawn MCP servers and tool subprocesses that
@@ -236,17 +261,18 @@ outlive it.
 | Field | Why |
 |---|---|
 | `command` | The CLI and its flags. Argument list, never a shell string. |
+| `request_timeout` | Bounds each call end-to-end; when it fires, the whole process group is killed. The default 600 s is sized for an agentic call — minutes, not seconds — so raise it before reading a slow harness as a hang. |
 | `schema_flag`, `answer_key` | Native structured output — the schema flag plus exactly one answer channel. The CLI option that takes a JSON Schema on the command line, and the stdout-envelope key the answer comes back under (`--json-schema` / `structured_output` for `claude -p`). Unset, the `OUTPUT.json` file handshake applies. |
 | `schema_as_path` | `schema_flag` passes the workspace `SCHEMA.json` path instead of the schema text, for a flag that wants a file (`--output-schema` for `codex exec`). |
 | `answer_file_flag` | The other answer channel: a flag naming a file the CLI itself writes the final message into (`--output-last-message` for `codex exec`); the answer is then read from `ANSWER.json`. Set this or `answer_key`, never both. |
 | `strict_schema` | Rewrite the wire schema into the OpenAI strict-mode subset (objects closed and fully required, optionals nullable) and strip the invited nulls from the answer. For a backend whose schema flag lands in strict structured output (`codex exec`). |
-| `system_flag` | Inline prompts — requires `schema_flag`. The CLI option that takes a system prompt on the command line (`--append-system-prompt` for `claude -p`); the user text then goes to stdin and no instruction is sent. Unset, the harness is told to read `SYSTEM.md`/`USER.md` itself. |
+| `system_flag` | Inline prompts — requires `schema_flag` (and with it an answer channel). The CLI option that takes a system prompt on the command line (`--append-system-prompt` for `claude -p`); the user text then goes to stdin and no instruction is sent. Unset, the harness is told to read `SYSTEM.md`/`USER.md` itself. |
 | `stdin_prompts` | The other way to inline — requires `schema_flag`, excludes `system_flag`. The whole prompt (system, then user) travels on stdin verbatim, for a CLI with no system flag whose sandboxed file reads cannot be trusted (`codex exec`). |
 | `model_name`, `llm_base_url` | Global, and the backend's identity. `config/memory/v2.yaml` builds the memory `LLMFingerprint` from them, so cards produced by a harness never pool with cards produced by an API model. Change `model_name` whenever you change `command`. |
 | `llm_max_concurrent` | Each harness process costs hundreds of MB and spawns children. Defaults to 4 here, not `null`. |
 | `prefetch_factor` | Defaults to 1: prefetched DAGs are not free when every call forks a process. |
 | `workspace_root` | Defaults under the system temp dir, deliberately outside the repository. It is only the parent: each chat creates its own `0700` directory beneath it, so two of them can share a root without colliding. The prompts and the answers are kept there, and shared storage is the usual home for it. |
-| `env` | Layered onto the parent environment — point the harness's own state directory somewhere disposable. |
+| `env` | Layered onto the parent environment. The shipped config uses it to give the harness its own persistent state directory (`CLAUDE_CONFIG_DIR`) — that directory holds the login credentials, so it must survive across runs: log in to it once, and do not point it at `/tmp`. |
 
 **Containment is your job.** `--allowedTools` is an auto-approval allowlist, not
 a sandbox: a harness launched with `--allowedTools Read` will still run shell
@@ -276,7 +302,11 @@ turn count 15% off input and 17% off cost, with no change to the answer. Compare
 turn count: an agentic call's total is dominated by how many turns it took, and
 that varies run to run on identical input. The
 equivalent on another CLI is whatever disables user-level config — do it, and
-treat a harness that cannot as a harness that leaks. `--exclude-dynamic-system-prompt-sections`
+treat a harness that cannot as a harness that leaks. `config/llm/codex.yaml` is
+the shipped exception: `~/.codex/config.toml` is where codex keeps its login
+(and any proxy it needs to reach OpenAI), so the file stays inherited, and the
+config instead pins on the command line the key a run must not silently
+inherit from it — `model_reasoning_effort`. `--exclude-dynamic-system-prompt-sections`
 completes the picture: it moves the per-call working directory out of the system
 prompt, which otherwise differs on every call and breaks the cached prefix.
 
@@ -313,8 +343,8 @@ be a result envelope. There the answer never comes from stdout, so no harness
 is degraded by staying quiet. Under `schema_flag` the opposite holds: the
 envelope carries the answer, so a missing, oversized (the cap is 1 MiB),
 unparseable or answer-less envelope is a failed call, reported with the
-envelope's own text quoted — the oversized case reports its size instead — so
-a quota or auth error surfaces in the run log.
+envelope's own text quoted — the oversized case reports the cap it exceeded
+instead — so a quota or auth error surfaces in the run log.
 
 Read the input total with the harness in mind: it includes cache reads and
 writes, which are billed input and are most of an agentic CLI's spend. A single
@@ -363,7 +393,7 @@ python run.py problem.name=toy_example \
 |-------|---------|
 | `experiment` | `base`, `full_featured`, `prompt_coevolution` |
 | `algorithm` | `single_island_no_distant_parents` (default), `single_island`, `single_island_2d`, `multi_island`, `topology_3d` (+ `_ret` variant), `chains_bd3d` (chain-strategy 3D behavior space: hop_depth × passages_fetched × instr_chars; requires `enable_chain_structural_metrics=true` + `program_format=json_document` via `algorithm_requires`) |
-| `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `balanced`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini3_flash`, `gemini3_flash_high` (fast gemini-3-flash, reasoning=high), `gemini35_flash`, `gpt54_mini`, `zai`, `qwen_thinking`, `llama31_8b`, `local_proxy`, `harness` (an agentic coding CLI instead of an HTTP endpoint — see [Agentic Coding Harness Backend](#agentic-coding-harness-backend)) |
+| `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `balanced`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini3_flash`, `gemini3_flash_high` (fast gemini-3-flash, reasoning=high), `gemini35_flash`, `gpt54_mini`, `zai`, `qwen_thinking`, `llama31_8b`, `local_proxy`, `harness` (an agentic coding CLI instead of an HTTP endpoint — see [Agentic Coding Harness Backend](#agentic-coding-harness-backend)), `codex` (the same backend wired for `codex exec`) |
 | `pipeline` | `guided` (default), `memory_guided` (see [MEMORY_GUIDED_PIPELINE.md](MEMORY_GUIDED_PIPELINE.md)), `custom`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `prompt_evolution`, `optuna_opt` |
 | `archive_selector` | `point` (default — replace elite iff weighted fitness sum is higher), `paired_bootstrap` (noise-aware paired bootstrap gate, knob: `archive_selector.p_accept`; needs a validator that emits `per_sample_scores` through `_program_metadata`) |
 | `program_format` | `python_source` (default), `json_document` |

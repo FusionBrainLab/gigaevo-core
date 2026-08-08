@@ -211,6 +211,103 @@ class TestStrictJsonSchema:
     def test_non_object_nodes_pass_through(self):
         assert strict_json_schema({"type": "string"}) == {"type": "string"}
 
+    def test_a_map_shaped_object_is_refused(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "counts": {
+                    "type": "object",
+                    "additionalProperties": {"type": "integer"},
+                },
+            },
+            "required": ["counts"],
+        }
+        with pytest.raises(ValueError, match="map-shaped"):
+            strict_json_schema(schema)
+
+    def test_a_bare_object_with_no_properties_is_refused(self):
+        schema = {
+            "type": "object",
+            "properties": {"blob": {"type": "object"}},
+            "required": ["blob"],
+        }
+        with pytest.raises(ValueError, match="map-shaped"):
+            strict_json_schema(schema)
+
+    def test_an_empty_properties_object_still_strictifies(self):
+        strict = strict_json_schema({"type": "object", "properties": {}})
+        assert strict["additionalProperties"] is False
+        assert strict["required"] == []
+
+    def test_optional_properties_under_a_union_are_refused(self):
+        schema = {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {"a": {"type": "string"}},
+                    "required": [],
+                },
+                {
+                    "type": "object",
+                    "properties": {"b": {"type": "string"}},
+                    "required": ["b"],
+                },
+            ]
+        }
+        with pytest.raises(ValueError, match="union"):
+            strict_json_schema(schema)
+
+    def test_all_required_union_branches_still_strictify(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "card": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "properties": {"kind": {"type": "string"}},
+                            "required": ["kind"],
+                        },
+                        {"type": "null"},
+                    ]
+                }
+            },
+            "required": ["card"],
+        }
+        branch = strict_json_schema(schema)["properties"]["card"]["anyOf"][0]
+        assert branch["additionalProperties"] is False
+        assert branch["required"] == ["kind"]
+
+    def test_a_nullable_optional_under_a_union_is_allowed(self):
+        schema = {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "note": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                    "required": [],
+                },
+            ]
+        }
+        branch = strict_json_schema(schema)["anyOf"][0]
+        assert branch["required"] == ["note"]
+
+    def test_a_field_literally_named_anyof_is_not_a_union(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "anyOf": {
+                    "type": "object",
+                    "properties": {"x": {"type": "integer"}},
+                    "required": [],
+                },
+            },
+            "required": ["anyOf"],
+        }
+        inner = strict_json_schema(schema)["properties"]["anyOf"]
+        assert inner["required"] == ["x"]
+
 
 class TestStripStrictNulls:
     SCHEMA = {

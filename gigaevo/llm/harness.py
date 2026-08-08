@@ -370,8 +370,9 @@ class HarnessChat(BaseChatModel):
     #: Flag that puts the system text on the harness's command line, with the
     #: user text going to stdin verbatim: no instruction, no file-reading
     #: turns, the harness answers the prompt directly. Requires ``schema_flag``
-    #: and ``answer_key`` -- once the stdin instruction is gone, the stdout
-    #: envelope is the only answer channel left. ``SYSTEM.md`` and ``USER.md``
+    #: and with it an answer channel -- once the stdin instruction is gone,
+    #: nothing would tell the harness to write ``OUTPUT.json``, so the native
+    #: channel is the only one left. ``SYSTEM.md`` and ``USER.md``
     #: are still written, as the audit record of what the call carried.
     system_flag: str = ""
     #: The prompt text itself travels on stdin — system then user, verbatim —
@@ -414,9 +415,9 @@ class HarnessChat(BaseChatModel):
             )
         if self.system_flag and not self.schema_flag:
             raise ValueError(
-                "HarnessChat needs schema_flag and answer_key to use "
+                "HarnessChat needs schema_flag and an answer channel to use "
                 "system_flag: inlining the prompts drops the stdin "
-                "instruction, and only the stdout envelope can carry the "
+                "instruction, and only the native channel can carry the "
                 "answer without one"
             )
         if self.stdin_prompts and not self.schema_flag:
@@ -738,7 +739,8 @@ class HarnessChat(BaseChatModel):
     def _read_usage(self, workspace: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         """Recover token counts from a harness that reports them on stdout.
 
-        Every failure here is silent and yields zeros. Reporting usage is the
+        Every failure here yields zeros, and only an unreadable stdout logs a
+        warning on the way. Reporting usage is the
         harness's option, not its obligation: prose, an event stream, an empty
         file and a deleted one are all ordinary, and none of them says anything
         about whether the call succeeded — the answer has already been read,
@@ -747,9 +749,16 @@ class HarnessChat(BaseChatModel):
         """
         try:
             raw = self._read_stdout(workspace).decode("utf-8", "replace")
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
             # ValueError covers every hazard _read_stdout raises, and none of
-            # them is worth failing a served call over.
+            # them is worth failing a served call over — but an over-cap or
+            # unreadable stdout zeroes the longest, most expensive calls, so
+            # say which ones vanished from the cost series.
+            logger.warning(
+                "[HarnessChat:{}] usage unreadable, reporting zeros: {}",
+                self.model_name,
+                exc,
+            )
             return dict(_NO_USAGE), _openai_shaped(0, 0)
         try:
             envelope = json.loads(raw)
@@ -785,8 +794,16 @@ class HarnessChat(BaseChatModel):
                 # Runs on success too: the leader exiting does not reap the MCP
                 # servers it started, and they hold half a gigabyte each.
                 _kill_group(proc.pid)
-                with contextlib.suppress(subprocess.TimeoutExpired):
+                try:
                     proc.wait(timeout=_REAP_GRACE)
+                except subprocess.TimeoutExpired:
+                    logger.warning(
+                        "[HarnessChat:{}] harness pid {} survived SIGKILL "
+                        "for {}s; leaking the process group",
+                        self.model_name,
+                        proc.pid,
+                        _REAP_GRACE,
+                    )
         self._check_exit(proc.returncode, workspace)
 
     async def _aexec(self, workspace: Path, argv: list[str], stdin: str) -> None:
@@ -819,8 +836,16 @@ class HarnessChat(BaseChatModel):
                 raise self._timeout_error(workspace) from exc
             finally:
                 _kill_group(proc.pid)
-                with contextlib.suppress(TimeoutError):
+                try:
                     await asyncio.wait_for(proc.wait(), timeout=_REAP_GRACE)
+                except TimeoutError:
+                    logger.warning(
+                        "[HarnessChat:{}] harness pid {} survived SIGKILL "
+                        "for {}s; leaking the process group",
+                        self.model_name,
+                        proc.pid,
+                        _REAP_GRACE,
+                    )
         self._check_exit(proc.returncode, workspace)
 
     def _read_output(self, workspace: Path, name: str = OUTPUT_FILE) -> dict[str, Any]:

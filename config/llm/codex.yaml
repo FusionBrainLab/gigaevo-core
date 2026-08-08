@@ -42,7 +42,9 @@ llm:
       # disk, --skip-git-repo-check because the workspace is a bare temp
       # directory. model_reasoning_effort is pinned: the operator's
       # ~/.codex/config.toml sets its own and a run must not silently
-      # inherit it.
+      # inherit it. The file itself stays inherited on purpose — it is where
+      # codex keeps its login and any proxy it needs — so pin any other key
+      # a run must not absorb the same way, with -c on the command line.
       stdin_prompts: true
       command:
         - codex

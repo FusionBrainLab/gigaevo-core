@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 
 from langchain_core.language_models import LanguageModelInput
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_openai import ChatOpenAI
@@ -171,7 +172,7 @@ class MultiModelRouter(Runnable):
 
     def __init__(
         self,
-        models: list[ChatOpenAI],
+        models: list[BaseChatModel],
         probabilities: list[float],
         writer: LogWriter | None = None,
         name: str = "default",
