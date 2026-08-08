@@ -133,7 +133,19 @@ class PromptIODumpHandler(BaseCallbackHandler):
     def _write(self, record: dict[str, Any]) -> None:
         line = json.dumps(record, ensure_ascii=False, default=str)
         with _WRITE_LOCK:
-            with self._path.open("a", encoding="utf-8") as fh:
+            # backslashreplace so a lone surrogate -- a model truncating a pair,
+            # which json.loads accepts on the way in -- costs nothing. Strict
+            # UTF-8 raises here instead, and the callback swallows it, so the
+            # call that produced the odd text is the one missing from the audit
+            # trail. The escape lands inside the JSON string and reads back as
+            # the same character. The one exception: two lone surrogates that
+            # sit adjacent and happen to form a valid pair are recombined by
+            # json.loads into the astral character they encode, so the record
+            # normalizes rather than round-trips. Only surrogates take this
+            # path at all, and each of them used to cost the whole record.
+            with self._path.open(
+                "a", encoding="utf-8", errors="backslashreplace"
+            ) as fh:
                 fh.write(line + "\n")
 
 

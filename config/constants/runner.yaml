@@ -3,3 +3,4 @@
 
 runner_poll_interval: 5.0
 max_concurrent_dags: 10
+prefetch_factor: 8

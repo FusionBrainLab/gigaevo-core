@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 import contextlib
 from contextvars import ContextVar
+import math
 import threading
 from typing import Annotated, Any
 
@@ -54,6 +55,11 @@ class TokenUsage(BaseModel):
     generated: int = 0
     reasoning: int = 0  # Reasoning tokens (subset of generated, for thinking models)
     total: int = 0
+    # Harness backends report these on the result envelope; API models don't.
+    # None means "not reported" — the writer skips the scalars entirely, so
+    # API-model series aren't buried under zero-filled noise.
+    cost_usd: float | None = None
+    turns: int | None = None
 
     @classmethod
     def from_response(cls, response: Any) -> "TokenUsage | None":
@@ -79,12 +85,28 @@ class TokenUsage(BaseModel):
         if not reasoning:
             reasoning = usage.get("thinking_tokens", 0) or 0
 
-        return cls(
+        instance = cls(
             context=usage.get("prompt_tokens", 0),
             generated=usage.get("completion_tokens", 0),
             reasoning=reasoning,
             total=usage.get("total_tokens", 0),
         )
+
+        # json.loads happily produces negatives, NaN, Infinity, and integers
+        # float() cannot represent; one such value either poisons every
+        # cumulative after it or crashes the metric write of a served call.
+        cost = response.response_metadata.get("total_cost_usd")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            with contextlib.suppress(OverflowError):
+                value = float(cost)
+                if value >= 0.0 and math.isfinite(value):
+                    instance.cost_usd = value
+        turns = response.response_metadata.get("num_turns")
+        if isinstance(turns, int) and not isinstance(turns, bool) and turns >= 0:
+            with contextlib.suppress(OverflowError):
+                instance.turns = int(float(turns))
+
+        return instance
 
 
 class TokenTracker(BaseModel):
@@ -133,6 +155,10 @@ class TokenTracker(BaseModel):
             cum.generated += usage.generated
             cum.reasoning += usage.reasoning
             cum.total += usage.total
+            if usage.cost_usd is not None:
+                cum.cost_usd = (cum.cost_usd or 0.0) + usage.cost_usd
+            if usage.turns is not None:
+                cum.turns = (cum.turns or 0) + usage.turns
 
             stage_key = (stage, model_name)
             if stage_key not in self.cumulative_by_stage:
@@ -142,6 +168,10 @@ class TokenTracker(BaseModel):
             stage_cum.generated += usage.generated
             stage_cum.reasoning += usage.reasoning
             stage_cum.total += usage.total
+            if usage.cost_usd is not None:
+                stage_cum.cost_usd = (stage_cum.cost_usd or 0.0) + usage.cost_usd
+            if usage.turns is not None:
+                stage_cum.turns = (stage_cum.turns or 0) + usage.turns
 
             self._write_metrics(model_name, usage, cum)
             self._write_stage_metrics(stage, model_name, usage, stage_cum)
@@ -174,6 +204,17 @@ class TokenTracker(BaseModel):
         self.writer.scalar(
             "cumulative_total_tokens", float(cumulative.total), path=path
         )
+
+        if usage.cost_usd is not None:
+            self.writer.scalar("cost_usd", usage.cost_usd, path=path)
+            self.writer.scalar(
+                "cumulative_cost_usd", cumulative.cost_usd or 0.0, path=path
+            )
+        if usage.turns is not None:
+            self.writer.scalar("num_turns", float(usage.turns), path=path)
+            self.writer.scalar(
+                "cumulative_num_turns", float(cumulative.turns or 0), path=path
+            )
 
         logger.debug(
             "[TokenTracker:{}] {}: {} ctx + {} gen ({} reasoning) = {} (cumulative: {})",
@@ -225,3 +266,14 @@ class TokenTracker(BaseModel):
             float(stage_cumulative.total),
             path=path,
         )
+
+        if usage.cost_usd is not None:
+            self.writer.scalar("cost_usd", usage.cost_usd, path=path)
+            self.writer.scalar(
+                "cumulative_cost_usd", stage_cumulative.cost_usd or 0.0, path=path
+            )
+        if usage.turns is not None:
+            self.writer.scalar("num_turns", float(usage.turns), path=path)
+            self.writer.scalar(
+                "cumulative_num_turns", float(stage_cumulative.turns or 0), path=path
+            )

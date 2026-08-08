@@ -33,6 +33,11 @@ Checks: status gate, `GIGAEVO_PYTHON`, server reachability, model IDs, resolved 
 
 Returns `list[CheckResult]`. Any `CRITICAL` failure blocks launch.
 
+Server reachability and model IDs are probed over HTTP. A backend whose
+`llm_base_url` is not an HTTP URL — `harness://…`, for a subprocess backend —
+is reported as *not probed* rather than unreachable, so it does not block the
+gate on a check that cannot apply to it.
+
 ### `launch.py` — Launch Orchestrator
 
 Sequences the full launch atomically: gate → checks → claim DBs → generate script → exec → record PIDs → set status → spawn watchdog.

@@ -8,6 +8,8 @@ from gigaevo.experiment.checks import (
     CheckResult,
     Severity,
     _check_gigaevo_python,
+    _check_llm_reachable,
+    _check_model_ids,
     _check_smoke_test,
     _check_treatment_verification,
     run_checks,
@@ -165,3 +167,48 @@ class TestTreatmentVerification:
         results: list[CheckResult] = []
         _check_treatment_verification(results, m)
         assert not results[0].passed
+
+
+# ---------------------------------------------------------------------------
+# Non-HTTP LLM backends
+# ---------------------------------------------------------------------------
+
+
+class TestNonHttpBackends:
+    """A harness backend has no /models endpoint to probe.
+
+    ``llm_base_url`` is the backend's identity — the memory fingerprint is
+    built from it — so a harness run still sets it, to ``harness://<name>``.
+    Probing that as a URL made every such manifest fail a CRITICAL gate and
+    blocked launch.
+    """
+
+    def _harness_manifest(self) -> MagicMock:
+        run = _make_run("A", 5)
+        run.extra_overrides = [
+            "llm_base_url=harness://claude-code",
+            "model_name=claude-code/sonnet",
+        ]
+        return _make_manifest(runs=[run])
+
+    def test_reachability_skips_non_http_urls(self):
+        results: list[CheckResult] = []
+        with patch("gigaevo.experiment.checks.urlopen") as mock_open:
+            _check_llm_reachable(results, self._harness_manifest())
+        assert mock_open.call_count == 0
+        assert results[0].passed, results[0].message
+        assert "harness://claude-code" in results[0].message
+
+    def test_model_ids_skip_non_http_urls(self):
+        results: list[CheckResult] = []
+        with patch("gigaevo.experiment.checks.urlopen") as mock_open:
+            _check_model_ids(results, self._harness_manifest())
+        assert mock_open.call_count == 0
+        assert results[0].passed, results[0].message
+
+    def test_http_urls_are_still_probed(self):
+        results: list[CheckResult] = []
+        with patch("gigaevo.experiment.checks.urlopen") as mock_open:
+            _check_llm_reachable(results, _make_manifest(runs=[_make_run("A", 5)]))
+        assert mock_open.call_count == 1
+        assert results[0].passed

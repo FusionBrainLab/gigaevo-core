@@ -521,8 +521,8 @@ class _StructuredOutputRouter(Runnable):
             self._tracker.track(raw, name)
             _remember_token_usage(raw)
         parsed = response.get("parsed")
-        if parsed is None and raw is not None:
-            content = getattr(raw, "content", "")
+        if parsed is None:
+            content = _extract_content_text(getattr(raw, "content", "") or "")
             excerpt = (content[:500] + "…") if len(content) > 500 else content
             raise ValueError(
                 f"[{name}] Structured output parse failed: raw response had no parsable schema. "

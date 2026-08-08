@@ -13,6 +13,8 @@ from gigaevo.llm.schema_compat import (
     inline_refs,
     nonportable_keys,
     portable_json_schema,
+    strict_json_schema,
+    strip_strict_nulls,
 )
 
 
@@ -129,3 +131,125 @@ def test_portable_json_schema_cleans_a_pydantic_union():
     assert nonportable_keys(portable) == set()
     assert portable["anyOf"][0]["properties"]["kind"]["enum"] == ["keep"]
     assert portable["anyOf"][1]["properties"]["title"]["minLength"] == 1
+
+
+class TestStrictJsonSchema:
+    def test_objects_close_and_require_every_key(self):
+        schema = {
+            "type": "object",
+            "properties": {"a": {"type": "string"}, "b": {"type": "integer"}},
+            "required": ["a"],
+        }
+        strict = strict_json_schema(schema)
+        assert strict["additionalProperties"] is False
+        assert strict["required"] == ["a", "b"]
+
+    def test_an_optional_property_becomes_nullable(self):
+        schema = {
+            "type": "object",
+            "properties": {"opt": {"type": "string"}},
+        }
+        strict = strict_json_schema(schema)
+        assert strict["properties"]["opt"] == {
+            "anyOf": [{"type": "string"}, {"type": "null"}]
+        }
+
+    def test_a_required_property_is_left_alone(self):
+        schema = {
+            "type": "object",
+            "properties": {"req": {"type": "string"}},
+            "required": ["req"],
+        }
+        assert strict_json_schema(schema)["properties"]["req"] == {"type": "string"}
+
+    def test_an_already_nullable_optional_is_not_double_wrapped(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "u": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            },
+        }
+        strict = strict_json_schema(schema)
+        assert strict["properties"]["u"]["anyOf"] == [
+            {"type": "string"},
+            {"type": "null"},
+        ]
+
+    def test_an_optional_union_gains_a_null_branch_in_place(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "u": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+            },
+        }
+        strict = strict_json_schema(schema)
+        assert strict["properties"]["u"]["anyOf"] == [
+            {"type": "string"},
+            {"type": "integer"},
+            {"type": "null"},
+        ]
+
+    def test_nested_objects_in_array_items_are_transformed(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"x": {"type": "integer"}},
+                        "required": [],
+                    },
+                }
+            },
+            "required": ["rows"],
+        }
+        inner = strict_json_schema(schema)["properties"]["rows"]["items"]
+        assert inner["additionalProperties"] is False
+        assert inner["required"] == ["x"]
+
+    def test_non_object_nodes_pass_through(self):
+        assert strict_json_schema({"type": "string"}) == {"type": "string"}
+
+
+class TestStripStrictNulls:
+    SCHEMA = {
+        "type": "object",
+        "properties": {
+            "req": {"type": "string"},
+            "opt": {"type": "integer"},
+            "truly_nullable": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "rows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"x": {"type": "integer"}},
+                    "required": [],
+                },
+            },
+        },
+        "required": ["req", "truly_nullable"],
+    }
+
+    def test_a_null_for_a_strictified_optional_is_dropped(self):
+        payload = {"req": "a", "opt": None}
+        assert strip_strict_nulls(payload, self.SCHEMA) == {"req": "a"}
+
+    def test_a_null_for_a_genuinely_nullable_field_survives(self):
+        payload = {"req": "a", "truly_nullable": None}
+        assert strip_strict_nulls(payload, self.SCHEMA) == payload
+
+    def test_a_null_for_a_required_field_survives_to_fail_validation(self):
+        payload = {"req": None}
+        assert strip_strict_nulls(payload, self.SCHEMA) == payload
+
+    def test_nulls_inside_array_items_are_dropped(self):
+        payload = {"req": "a", "truly_nullable": "b", "rows": [{"x": None}, {"x": 2}]}
+        stripped = strip_strict_nulls(payload, self.SCHEMA)
+        assert stripped["rows"] == [{}, {"x": 2}]
+
+    def test_unknown_keys_and_non_dict_payloads_pass_through(self):
+        payload = {"req": "a", "stray": None}
+        assert strip_strict_nulls(payload, self.SCHEMA) == payload
+        assert strip_strict_nulls([1, None], self.SCHEMA) == [1, None]
+        assert strip_strict_nulls("x", self.SCHEMA) == "x"

@@ -1,0 +1,89 @@
+# @package _global_
+# Agentic coding-harness backend: GigaEvo drives a CLI (claude, codex, …)
+# instead of an HTTP chat endpoint. See docs/USAGE.md for the full contract.
+#
+# model_name and llm_base_url are global on purpose — config/memory/v2.yaml
+# builds the memory LLMFingerprint from them, so cards produced by a harness
+# must not pool with cards produced by an API model. Change model_name whenever
+# you change `command`; the two together are the backend's identity.
+
+model_name: claude-code/sonnet
+llm_base_url: harness://claude-code
+
+# A subprocess backend needs a cap: each harness process is hundreds of MB and
+# spawns MCP children. Prefetched DAGs are not free here either.
+llm_max_concurrent: 4
+prefetch_factor: 1
+
+llm:
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  structured_output_method: json_schema
+  models:
+    - _target_: gigaevo.llm.harness.HarnessChat
+      model_name: ${model_name}
+      request_timeout: ${request_timeout}
+      prompts_dir: ${prompts.dir}
+      # --json-schema hands the schema to the CLI, which then returns the answer
+      # in its own result envelope under `structured_output`. That replaces the
+      # OUTPUT.json handshake and, with it, the turns the harness spent drafting
+      # and writing that file: mutation ~8 turns -> 4, suggestion ~7 -> 5.
+      # Fleet-measured (n~100 per arm, warm cache, matched pairs): 67% less
+      # input, 32% less cost per call. Both fields or neither -- the schema is
+      # only usable if the answer can be found again.
+      schema_flag: --json-schema
+      answer_key: structured_output
+      # --append-system-prompt inlines the conversation itself: system text on
+      # this flag, user text on stdin. The harness answers directly instead of
+      # spending turns reading SYSTEM.md and USER.md -- the files are still
+      # written as the audit record. Requires schema_flag/answer_key above.
+      system_flag: --append-system-prompt
+      # --disallowedTools is the containment knob. --allowedTools is only an
+      # auto-approval allowlist: it does NOT stop the harness using other tools.
+      # The prompt carries evolved-program text by design, so the denylist
+      # cannot rest on --safe-mode defaults or on the model declining an
+      # injected instruction: writes (Write, Edit, NotebookEdit), egress
+      # (WebFetch, WebSearch), subprocesses and subagents (Bash, Task, Agent,
+      # Skill) and scheduling (Cron*, ScheduleWakeup) are denied by name.
+      # Read is denied too: under system_flag the prompts arrive on argv and
+      # stdin, so no call needs to open a file — the only Read an injected
+      # instruction could ask for is one it should not get. If system_flag is
+      # ever unset, restore `--allowedTools Read`: it is how SYSTEM.md and
+      # USER.md arrive under the file modes.
+      # --output-format json makes the CLI print a result envelope carrying
+      # `usage` and `total_cost_usd`, which the backend reads back off stdout.
+      # With schema_flag set it is NOT optional: the same envelope carries the
+      # answer under answer_key, so dropping this flag fails every call at
+      # preflight. Only without schema_flag is it merely the difference
+      # between real token counts and zeros.
+      # --safe-mode drops the operator's own MCP servers, plugins, skills and
+      # CLAUDE.md. Those are not neutral: their tool schemas are prepended to
+      # every turn, and they hand the harness live capabilities -- an unrelated
+      # MCP server was reaching mutation calls. It also makes a run depend on
+      # whatever the operator had installed. Measured at one turn, dropping them
+      # takes fixed overhead from 30.4k to 4.8k tokens.
+      # --exclude-dynamic-system-prompt-sections moves the working directory out
+      # of the system prompt. Every call gets a fresh workspace, so leaving it
+      # there breaks the cached prefix on every call.
+      # --no-session-persistence stops the CLI writing a transcript per call
+      # into CLAUDE_CONFIG_DIR; nothing here ever resumes a session.
+      command:
+        - claude
+        - -p
+        - --output-format
+        - json
+        - --model
+        - claude-sonnet-5
+        - --safe-mode
+        - --exclude-dynamic-system-prompt-sections
+        - --no-session-persistence
+        - --disallowedTools
+        - Read,Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,CronCreate,CronDelete,CronList,ScheduleWakeup
+      env:
+        # Holds the harness's credentials. It has to survive across runs, so it
+        # cannot live in the per-call workspace — and a fixed name under /tmp is
+        # one any other user on the box can create first. Do not move it to /tmp.
+        CLAUDE_CONFIG_DIR: ${oc.env:HOME}/.cache/gigaevo/harness-state
+  probabilities: [1.0]
+  writer: ${ref:writer}
+  max_concurrent: ${llm_max_concurrent}

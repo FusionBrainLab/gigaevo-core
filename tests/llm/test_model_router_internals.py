@@ -290,3 +290,39 @@ class TestStructuredOutputRouter:
         result = router._process({"parsed": "data"}, "model-a")
         assert result == "data"
         tracker.track.assert_not_called()
+
+    def test_process_raises_when_parsed_and_raw_are_both_none(self):
+        """No parsed output is a failure even when the raw response is absent.
+
+        Returning None here sends an unusable value downstream, where it
+        surfaces far from the call that produced it.
+        """
+        router = _StructuredOutputRouter(
+            models=[],
+            model_names=[],
+            probabilities=[],
+            langfuse=None,
+            tracker=MagicMock(),
+        )
+        with pytest.raises(ValueError, match="parse failed"):
+            router._process({"parsed": None, "raw": None}, "model-a")
+
+    def test_process_error_excerpt_handles_block_list_content(self):
+        """Reasoning models return content as a list of blocks, not a str.
+
+        Slicing that list takes blocks rather than characters, so the excerpt
+        is unbounded, and appending the ellipsis raises TypeError from inside
+        the error path — masking the parse failure it was meant to report.
+        """
+        raw = MagicMock()
+        raw.content = [{"type": "text", "text": "x" * 20} for _ in range(600)]
+        router = _StructuredOutputRouter(
+            models=[],
+            model_names=[],
+            probabilities=[],
+            langfuse=None,
+            tracker=MagicMock(),
+        )
+        with pytest.raises(ValueError, match="parse failed") as excinfo:
+            router._process({"parsed": None, "raw": raw}, "model-a")
+        assert len(str(excinfo.value)) < 1000

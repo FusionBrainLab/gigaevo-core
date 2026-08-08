@@ -218,6 +218,10 @@ The **DagRunner** manages multiple concurrent DAGs:
 **Features:**
 - **Polling Loop**: Continuously checks Redis for programs in "runnable" state
 - **Concurrency Control**: Enforces `max_concurrent_dags` limit
+- **Prefetch**: Pre-creates `max_concurrent_dags × prefetch_factor` tasks so a
+  finishing DAG is replaced without a poll round-trip. Lower it when a stage is
+  expensive to have merely *queued* — an LLM backend that forks a process per
+  call, for instance
 - **Metrics Collection**: Tracks success rates, throughput, errors
 - **Graceful Shutdown**: Awaits active DAGs before stopping
 

@@ -92,6 +92,86 @@ def nonportable_keys(schema: dict) -> set[str]:
     return found
 
 
+def strict_json_schema(schema: dict) -> dict:
+    """Rewrite into the OpenAI strict-mode subset (probed 2026-08-07).
+
+    Strict structured output rejects any object node without
+    ``additionalProperties: false`` and a ``required`` list naming every key in
+    ``properties``. Optionality therefore cannot be expressed by omission; the
+    convention is nullability, so originally-optional properties gain a
+    ``null`` branch (appended to an existing ``anyOf``, else wrapped in one).
+    ``strip_strict_nulls`` is the answer-side inverse.
+    """
+
+    def strictify(node: dict) -> dict:
+        if "properties" not in node and node.get("type") != "object":
+            return node
+        node = dict(node)
+        props = node.get("properties", {})
+        required = set(node.get("required", []))
+        node["properties"] = {
+            key: prop if key in required else _nullable_form(prop)
+            for key, prop in props.items()
+        }
+        node["required"] = list(props)
+        node["additionalProperties"] = False
+        return node
+
+    return _map_schema_nodes(schema, strictify)
+
+
+def strip_strict_nulls(payload: Any, schema: dict) -> Any:
+    """Drop the nulls ``strict_json_schema`` invited, so defaults apply.
+
+    ``schema`` is the ORIGINAL (pre-strict) schema: a null is dropped only for
+    a key that was optional there and not already nullable — exactly the keys
+    whose null branch the wire rewrite added. Nulls for required or genuinely
+    nullable keys pass through (the latter mean ``None``, the former must fail
+    validation loudly). Recurses via ``properties``/``items``; payloads under
+    union (``anyOf``) or unknown keys pass through untouched.
+    """
+    if isinstance(payload, dict) and isinstance(schema, dict):
+        props = schema.get("properties", {})
+        required = set(schema.get("required", []))
+        out = {}
+        for key, value in payload.items():
+            prop = props.get(key)
+            if (
+                value is None
+                and key not in required
+                and isinstance(prop, dict)
+                and not _nullable(prop)
+            ):
+                continue
+            out[key] = (
+                strip_strict_nulls(value, prop) if isinstance(prop, dict) else value
+            )
+        return out
+    if isinstance(payload, list) and isinstance(schema, dict):
+        items = schema.get("items")
+        if isinstance(items, dict):
+            return [strip_strict_nulls(v, items) for v in payload]
+    return payload
+
+
+def _nullable_form(prop: Any) -> Any:
+    if not isinstance(prop, dict) or _nullable(prop):
+        return prop
+    if isinstance(prop.get("anyOf"), list):
+        return {**prop, "anyOf": [*prop["anyOf"], {"type": "null"}]}
+    return {"anyOf": [prop, {"type": "null"}]}
+
+
+def _nullable(prop: dict) -> bool:
+    t = prop.get("type")
+    if t == "null" or (isinstance(t, list) and "null" in t):
+        return True
+    branches = prop.get("anyOf")
+    return isinstance(branches, list) and any(
+        isinstance(b, dict) and b.get("type") == "null" for b in branches
+    )
+
+
 def _map_schema_nodes(
     node: Any, fn: Callable[[dict], dict], is_properties_map: bool = False
 ) -> Any:
