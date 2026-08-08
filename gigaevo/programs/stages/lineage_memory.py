@@ -18,8 +18,8 @@ import difflib
 import json
 from typing import Any, Literal, cast
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -846,7 +846,7 @@ class IntraMemoryStage(Stage):
     def __init__(
         self,
         *,
-        llm: ChatOpenAI | MultiModelRouter,
+        llm: BaseChatModel | MultiModelRouter,
         storage: ProgramStorage,
         metrics_context: MetricsContext,
         max_children: int = 32,

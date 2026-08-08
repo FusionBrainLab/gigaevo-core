@@ -14,7 +14,6 @@ from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import Runnable, RunnableConfig
-from langchain_openai import ChatOpenAI
 from langfuse import Langfuse
 from langfuse.langchain import CallbackHandler
 from loguru import logger
@@ -51,6 +50,12 @@ def get_last_token_usage() -> TokenUsage | None:
 
 def _remember_selected_model(model_name: str) -> None:
     _selected_model_var.set(model_name)
+
+
+def _model_name(model: BaseChatModel) -> str:
+    """Every router backend (ChatOpenAI, HarnessChat) declares ``model_name``;
+    ``BaseChatModel`` itself does not type it, so read it dynamically."""
+    return getattr(model, "model_name")
 
 
 def _remember_token_usage(response: Any) -> None:
@@ -191,7 +196,7 @@ class MultiModelRouter(Runnable):
             )
 
         self.models = models
-        self.model_names = [m.model_name for m in models]
+        self.model_names = [_model_name(m) for m in models]
         self.probabilities = [p / sum(probabilities) for p in probabilities]
         self._task_model_map: dict[int, str] = {}
         self._name = name
@@ -222,7 +227,10 @@ class MultiModelRouter(Runnable):
             base_url = getattr(m, "base_url", None)
             if base_url:
                 logger.info(
-                    "[MultiModelRouter:{}] Model {} at {}", name, m.model_name, base_url
+                    "[MultiModelRouter:{}] Model {} at {}",
+                    name,
+                    _model_name(m),
+                    base_url,
                 )
 
         self._verify_models()
@@ -233,7 +241,7 @@ class MultiModelRouter(Runnable):
         Raises ``RuntimeError`` if any base URL is unreachable. Missing model
         names on a reachable server are logged as warnings.
         """
-        by_base_url: dict[str, list[ChatOpenAI]] = {}
+        by_base_url: dict[str, list[BaseChatModel]] = {}
         for model in self.models:
             base_url = getattr(model, "base_url", None) or getattr(
                 model, "openai_api_base", None
@@ -272,18 +280,19 @@ class MultiModelRouter(Runnable):
 
             available = {entry["id"] for entry in payload.get("data", [])}
             for model in models:
-                if model.model_name in available:
+                model_name = _model_name(model)
+                if model_name in available:
                     logger.info(
                         "[MultiModelRouter:{}] Model {} verified on {}",
                         self._name,
-                        model.model_name,
+                        model_name,
                         base_url,
                     )
                 else:
                     logger.warning(
                         "[MultiModelRouter:{}] Model {} NOT FOUND on {}. Available: {}",
                         self._name,
-                        model.model_name,
+                        model_name,
                         base_url,
                         sorted(available),
                     )
@@ -321,7 +330,7 @@ class MultiModelRouter(Runnable):
             return None
         return id(task) if task is not None else None
 
-    def _select(self) -> tuple[ChatOpenAI, str]:
+    def _select(self) -> tuple[BaseChatModel, str]:
         """Select a model based on probabilities."""
         idx = random.choices(range(len(self.models)), weights=self.probabilities)[0]
         model, name = self.models[idx], self.model_names[idx]
@@ -569,7 +578,7 @@ class _AutoStructuredOutputRouter(Runnable):
         self._router = router
         self._schema = schema
 
-    def _select(self) -> tuple[ChatOpenAI, str]:
+    def _select(self) -> tuple[BaseChatModel, str]:
         idx = random.choices(
             range(len(self._router.models)), weights=self._router.probabilities
         )[0]
@@ -591,7 +600,7 @@ class _AutoStructuredOutputRouter(Runnable):
         )
 
     def _bound_router(
-        self, model: ChatOpenAI, name: str, method: _StructuredMethod
+        self, model: BaseChatModel, name: str, method: _StructuredMethod
     ) -> _StructuredOutputRouter:
         wrapped = model.with_structured_output(
             _schema_for_method(self._schema, method),

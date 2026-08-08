@@ -5,8 +5,8 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal, Self, TypedDict
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from gigaevo.llm.agents.base import LangGraphAgent
@@ -94,7 +94,7 @@ class EquivalenceAgent(LangGraphAgent):
 
     def __init__(
         self,
-        llm: ChatOpenAI | MultiModelRouter,
+        llm: BaseChatModel | MultiModelRouter,
         system_prompt: str,
         user_prompt_template: str,
     ) -> None:

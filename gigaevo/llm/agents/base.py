@@ -9,8 +9,8 @@ from abc import ABC, abstractmethod
 import time
 from typing import Any
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables import Runnable
-from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from loguru import logger
@@ -60,7 +60,7 @@ class LangGraphAgent(ABC):
     # Subclasses must define their StateSchema
     StateSchema: type
 
-    def __init__(self, llm: ChatOpenAI | MultiModelRouter | Runnable):
+    def __init__(self, llm: BaseChatModel | MultiModelRouter | Runnable):
         """Initialize agent with LLM.
 
         Args:
