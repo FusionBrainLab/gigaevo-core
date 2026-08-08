@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v2.16.0 (2026-08-08)
+
+### Features
+
+- **llm**: Drive agentic coding CLIs (claude, codex) as the LLM backend
+  ([`2898971`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/28989710c7a91a817fd7cd3313e6a9e3339447f6))
+
+### Refactoring
+
+- **llm**: Widen the router and agent llm hints to BaseChatModel
+  ([`3947b76`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3947b7618b571501807de5b6cd8a9dc7ae3e8c1e))
+
+
 ## v2.15.1 (2026-08-04)
 
 ### Bug Fixes
