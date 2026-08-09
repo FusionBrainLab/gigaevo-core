@@ -75,7 +75,7 @@ The main mutation LLM and the memory subsystem LLM are configured separately.
 | Route | Config | Typical key |
 |---|---|---|
 | Main mutation | `llm=...`, `llm_base_url=...`, `model_name=...` | `OPENAI_API_KEY` for `llm=single` or `llm=local_proxy` |
-| Memory research/writer | `memory/llm=...` | `OPENROUTER_API_KEY` for hosted presets; `LITELLM_MASTER_KEY` for local `qwen_instruct` |
+| Memory research/writer | `memory/llm=...` | `OPENROUTER_API_KEY` for hosted presets; `LITELLM_MASTER_KEY` for local `qwen_instruct`; none for the `harness`/`codex` CLI presets |
 
 Hosted/OpenRouter style:
 
@@ -145,10 +145,13 @@ point. (`codex exec` keeps its login in `~/.codex/`, which the shipped config
 deliberately inherits — see the hermeticity note below.)
 
 **The memory LLM is separate.** The memory config groups bind their agents to
-their own router (`memory.llm`), which is an HTTP model and stays one — so
-`llm=harness` with `memory=v2` or `memory=full` still needs `OPENROUTER_API_KEY`
-and reachable network for the insight and card agents. Add
-`pipeline=guided memory=none` for a run that uses no HTTP endpoint at all.
+their own router (`memory.llm`), chosen independently of the evolution backend.
+The HTTP presets (`memory/llm=gemini` and friends) need `OPENROUTER_API_KEY`
+and reachable network; `memory/llm=harness` and `memory/llm=codex` mirror
+`config/llm/harness.yaml` and `config/llm/codex.yaml`, putting card authoring
+and retrieval research on the same CLI backends with no API key — mix arms
+freely, e.g. `llm=harness memory=v2 memory/llm=codex`. Add `memory=none` for a
+run with no memory LLM at all.
 
 **The workspace contract.** There is no per-harness adapter code. Every call
 gets a fresh directory, which is also the harness's working directory:

@@ -17,7 +17,8 @@ pip install -e .
 # The default llm=single sends OPENAI_API_KEY to llm_base_url.
 echo "OPENAI_API_KEY=sk-or-v1-your-openrouter-or-proxy-key" > .env
 
-# Optional, needed by default memory/llm=gemini when memory writes are enabled.
+# Optional, needed by default memory/llm=gemini when memory writes are enabled
+# (memory/llm=harness and memory/llm=codex run on the CLI backends, no key).
 echo "OPENROUTER_API_KEY=sk-or-v1-your-openrouter-key" >> .env
 
 # Shared endpoint for locally served models and chain evaluators.

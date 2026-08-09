@@ -221,6 +221,9 @@ python run.py problem.name=heilbron llm=harness
 
 # Codex CLI with a cheap model (needs `codex` on PATH, logged in)
 python run.py problem.name=heilbron llm=codex
+
+# The memory subsystem's LLM can ride the same backends — no API key at all:
+python run.py problem.name=heilbron llm=codex memory=v2 memory/llm=codex pipeline=memory_guided
 ```
 
 The CLI is driven headless, one process per call, with structured output,
