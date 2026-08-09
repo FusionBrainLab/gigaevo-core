@@ -1,0 +1,37 @@
+# @package memory.llm
+# Memory-subsystem LLM router on the codex harness backend — the same wire
+# contract as config/llm/codex.yaml (keep the HarnessChat block in sync with
+# it), packaged under memory.llm so `memory/llm=codex` puts card authoring/
+# research on codex independently of the evolution LLM. gpt-5.6-luna keeps the
+# memory model cheaper than evolution's, matching the gemini preset's intent.
+_target_: gigaevo.llm.models.MultiModelRouter
+_convert_: all
+name: memory
+structured_output_method: json_schema
+models:
+  - _target_: gigaevo.llm.harness.HarnessChat
+    model_name: codex/gpt-5.6-luna
+    request_timeout: ${request_timeout}
+    prompts_dir: ${prompts.dir}
+    schema_flag: --output-schema
+    schema_as_path: true
+    answer_file_flag: --output-last-message
+    strict_schema: true
+    stdin_prompts: true
+    command:
+      - codex
+      - exec
+      - --model
+      - gpt-5.6-luna
+      - -c
+      - model_reasoning_effort="medium"
+      - --sandbox
+      - read-only
+      - --ephemeral
+      - --skip-git-repo-check
+      - --json
+probabilities: [1.0]
+# Subprocess backend: each call is a harness process, so the memory router
+# needs the same cap as the evolution one, not the HTTP routers' 100.
+max_concurrent: 4
+writer: ${ref:writer}

@@ -1,0 +1,36 @@
+# @package memory.llm
+# Memory-subsystem LLM router on the claude coding-harness backend — the same
+# wire contract as config/llm/harness.yaml (keep the HarnessChat block in sync
+# with it), packaged under memory.llm so `memory/llm=harness` puts card
+# authoring/research on the harness independently of the evolution LLM.
+_target_: gigaevo.llm.models.MultiModelRouter
+_convert_: all
+name: memory
+structured_output_method: json_schema
+models:
+  - _target_: gigaevo.llm.harness.HarnessChat
+    model_name: claude-code/sonnet
+    request_timeout: ${request_timeout}
+    prompts_dir: ${prompts.dir}
+    schema_flag: --json-schema
+    answer_key: structured_output
+    system_flag: --append-system-prompt
+    command:
+      - claude
+      - -p
+      - --output-format
+      - json
+      - --model
+      - claude-sonnet-5
+      - --safe-mode
+      - --exclude-dynamic-system-prompt-sections
+      - --no-session-persistence
+      - --disallowedTools
+      - Read,Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,CronCreate,CronDelete,CronList,ScheduleWakeup
+    env:
+      CLAUDE_CONFIG_DIR: ${oc.env:HOME}/.cache/gigaevo/harness-state
+probabilities: [1.0]
+# Subprocess backend: each call is a harness process, so the memory router
+# needs the same cap as the evolution one, not the HTTP routers' 100.
+max_concurrent: 4
+writer: ${ref:writer}
