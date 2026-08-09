@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v2.17.0 (2026-08-09)
+
+### Features
+
+- **memory**: Run the memory LLM on the harness/codex CLI backends
+  ([`beafa5c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/beafa5c7c701cdb78dd00398029d089ff85454dd))
+
+
 ## v2.16.0 (2026-08-08)
 
 ### Features
