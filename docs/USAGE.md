@@ -12,6 +12,28 @@ python run.py problem.name=toy_example algorithm=multi_island
 python run.py problem.name=toy_example constants=base
 ```
 
+`python run.py` must be invoked from the repo root (the problem is looked up
+under `./problems/`). To start a run from anywhere — including problem
+directories living outside the repo, e.g. when another app uses GigaEvo as a
+tool — use the CLI instead:
+
+```bash
+# Bundled problem by name, from any cwd (nested names work too)
+gigaevo run toy_example max_mutants=50
+gigaevo run chains/hover/full max_mutants=100
+
+# External problem directory (task_description.txt, validate.py, metrics.yaml)
+gigaevo run /path/to/my_problem llm=codex hydra.run.dir=outputs/my_run
+```
+
+Everything after the target is forwarded to `run.py` verbatim — except
+`--help`, which shows the command's own help; use `gigaevo run <target> --
+--help` to forward it to Hydra. An existing local directory wins over a
+bundled problem of the same name. The working directory is preserved, so
+without `hydra.run.dir=...` outputs land under the caller's cwd. Requires an
+editable install (`pip install -e .` from a clone); see `tools/README.md` for
+details.
+
 ## Using Experiments
 
 Experiments are preset configurations in `config/experiment/`. Use the

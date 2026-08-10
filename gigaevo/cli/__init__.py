@@ -71,6 +71,11 @@ _LAZY_SUBCOMMANDS: dict[str, LazyCommandSpec] = {
     "launch": LazyCommandSpec(
         "gigaevo.cli.launch_cmd", "launch", "Validate and launch an experiment."
     ),
+    "run": LazyCommandSpec(
+        "gigaevo.cli.run_cmd",
+        "run",
+        "Start an evolution run on a problem directory or bundled problem.",
+    ),
     "events": LazyCommandSpec(
         "gigaevo.cli.events_cmd", "events", "Audit and plot canonical run events."
     ),

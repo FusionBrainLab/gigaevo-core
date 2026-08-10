@@ -150,6 +150,20 @@ redis-server
 python run.py problem.name=heilbron
 ```
 
+Or, from **any working directory** via the installed package — TARGET is a
+bundled problem name (nested names work) or a path to an external problem
+directory, and everything after it is forwarded to `run.py` verbatim:
+
+```bash
+gigaevo run heilbron max_mutants=250
+gigaevo run chains/hover/full max_mutants=100
+gigaevo run /path/to/my_problem llm=codex hydra.run.dir=outputs/my_run
+```
+
+Outputs land under the caller's cwd unless you pin `hydra.run.dir=...`; see
+[docs/USAGE.md](docs/USAGE.md) and [tools/README.md](tools/README.md) for
+details.
+
 Evolution starts with singleton-parent memory v2, live card writing, and the
 metadata-routing memory-guided pipeline. Before Bayesian selection, one agentic
 research pass forms a 12-card slate with at least four uniformly randomized
