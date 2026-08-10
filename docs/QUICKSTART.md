@@ -44,6 +44,15 @@ See the [README install table](../README.md#1-install) for the full mapping.
 python run.py problem.name=heilbron max_mutants=5
 ```
 
+`python run.py` must run from the repo root. With the package installed you
+can start the same run from any directory — including on problem dirs living
+outside the repo (`gigaevo run /path/to/my_problem ...`); see
+[USAGE.md](USAGE.md):
+
+```bash
+gigaevo run heilbron max_mutants=5
+```
+
 For a local LiteLLM/vLLM-compatible proxy, set its URL once in `.env` as above:
 
 ```bash
