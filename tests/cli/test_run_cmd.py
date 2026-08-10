@@ -27,7 +27,9 @@ def fake_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "run.py").write_text("# stub entrypoint\n")
+    (repo / "config").mkdir()
     make_problem_dir(repo / "problems", "bundled_problem")
+    make_problem_dir(repo / "problems" / "chains" / "hover", "full")
     return repo
 
 
@@ -63,13 +65,40 @@ class TestResolveProblem:
         assert ProblemLayout.VALIDATOR in str(excinfo.value)
         assert ProblemLayout.METRICS_FILE in str(excinfo.value)
 
-    def test_nonexistent_path_target_errors(self, tmp_path: Path, fake_repo: Path):
-        with pytest.raises(click.ClickException, match="not found"):
-            resolve_problem(str(tmp_path / "no" / "such_dir"), fake_repo)
+    def test_nested_bundled_name_resolves(self, fake_repo: Path):
+        name, resolved = resolve_problem("chains/hover/full", fake_repo)
+        assert name == "chains/hover/full"
+        assert (
+            resolved == (fake_repo / "problems" / "chains" / "hover" / "full").resolve()
+        )
+
+    def test_nonexistent_relative_target_lists_both_locations(
+        self, tmp_path: Path, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(click.ClickException) as excinfo:
+            resolve_problem("no/such_dir", fake_repo)
+        assert "no directory at" in str(excinfo.value)
+        assert "no bundled problem at" in str(excinfo.value)
+
+    def test_nonexistent_absolute_target_omits_bundled_hint(self, fake_repo: Path):
+        with pytest.raises(click.ClickException) as excinfo:
+            resolve_problem("/no/such_dir", fake_repo)
+        assert "no bundled problem" not in str(excinfo.value)
 
     def test_unknown_bare_name_errors(self, fake_repo: Path):
-        with pytest.raises(click.ClickException, match="neither"):
+        with pytest.raises(click.ClickException, match="not found"):
             resolve_problem("no_such_problem", fake_repo)
+
+    def test_invalid_local_dir_mentions_shadowed_bundle(
+        self, tmp_path: Path, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        cwd = tmp_path / "cwd"
+        (cwd / "bundled_problem").mkdir(parents=True)
+        monkeypatch.chdir(cwd)
+        with pytest.raises(click.ClickException) as excinfo:
+            resolve_problem("bundled_problem", fake_repo)
+        assert "shadows the bundled problem" in str(excinfo.value)
 
 
 class TestBuildRunArgv:
@@ -99,6 +128,21 @@ class TestBuildRunArgv:
         overrides = ("max_mutants=5", "--cfg", "job")
         argv = build_run_argv(tmp_path, "toy", tmp_path / "toy", overrides)
         assert argv[-3:] == list(overrides)
+
+    @pytest.mark.parametrize(
+        "override",
+        ["+problem.name=x", "++problem.name=x", "~problem.name", "problem.name@pkg=x"],
+    )
+    def test_advanced_override_forms_suppress_name_injection(
+        self, tmp_path: Path, override: str
+    ):
+        argv = build_run_argv(tmp_path, "toy", tmp_path / "toy", (override,))
+        assert "problem.name=toy" not in argv
+        assert override in argv
+
+    def test_advanced_override_form_suppresses_dir_injection(self, tmp_path: Path):
+        argv = build_run_argv(tmp_path, "toy", tmp_path / "toy", ("++problem.dir=/x",))
+        assert f"problem.dir={tmp_path / 'toy'}" not in argv
 
 
 class TestRunCommand:
@@ -132,18 +176,39 @@ class TestRunCommand:
         monkeypatch.setattr(run_cmd, "find_repo_root", lambda: fake_repo)
         monkeypatch.setattr(run_cmd.os, "execv", fake_execv)
 
+        cwd_before = Path.cwd()
         result = CliRunner().invoke(
             main,
             ["run", str(problem_dir), "max_mutants=1", "--cfg", "job"],
             catch_exceptions=False,
         )
         assert result.exit_code == 0
+        assert Path.cwd() == cwd_before
         assert captured["executable"] == sys.executable
         argv = captured["argv"]
         assert argv[1] == str(fake_repo / "run.py")
         assert "problem.name=external_problem" in argv
         assert f"problem.dir={problem_dir.resolve()}" in argv
         assert argv[-3:] == ["max_mutants=1", "--cfg", "job"]
+
+    def test_double_dash_forwards_help_flag(
+        self, tmp_path: Path, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from gigaevo.cli import main
+        import gigaevo.cli.run_cmd as run_cmd
+
+        problem_dir = make_problem_dir(tmp_path, "external_problem")
+        captured: dict = {}
+        monkeypatch.setattr(run_cmd, "find_repo_root", lambda: fake_repo)
+        monkeypatch.setattr(
+            run_cmd.os, "execv", lambda _exe, argv: captured.update(argv=argv)
+        )
+
+        result = CliRunner().invoke(
+            main, ["run", str(problem_dir), "--", "--help"], catch_exceptions=False
+        )
+        assert result.exit_code == 0
+        assert captured["argv"][-1] == "--help"
 
     def test_invalid_target_exits_nonzero(
         self, tmp_path: Path, fake_repo: Path, monkeypatch: pytest.MonkeyPatch

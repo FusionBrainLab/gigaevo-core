@@ -51,22 +51,27 @@ and `checkpoint` remain Redis-only because they require live process state.
 ```bash
 # Start an evolution run from ANY working directory (no cd into the repo).
 # TARGET is a problem-directory path (external problems) or a bundled
-# problem name (resolved under <repo>/problems/); everything after TARGET
-# is passed to run.py verbatim (Hydra overrides and flags).
+# problem name (resolved under <repo>/problems/, nested names included);
+# everything after TARGET is passed to run.py verbatim (Hydra overrides
+# and flags) — except --help, which shows the command's own help.
 gigaevo run heilbron max_mutants=250 llm=codex
+gigaevo run chains/hover/full max_mutants=100
 gigaevo run /path/to/my_problem hydra.run.dir=outputs/my_run
 gigaevo run ./my_problem --cfg job          # preview composed config
+gigaevo run ./my_problem -- --help          # forward Hydra's --help
 ```
 
 `gigaevo run` validates the target (`task_description.txt`, `validate.py`,
 `metrics.yaml` must exist), then execs `python run.py problem.name=<name>
 problem.dir=<abs path> [overrides...]` from the source checkout — it requires
-an editable install (`pip install -e .` from a git clone). The caller's working
-directory is preserved: Hydra's default output dir (`outputs/<date>/<time>`)
-lands under the caller's cwd, so pass `hydra.run.dir=...` to pin it. User
-overrides win — supplying your own `problem.name=`/`problem.dir=` suppresses
-injection. Distinct from `gigaevo launch`, which drives the experiment-manifest
-lifecycle (`experiments/<exp>/experiment.yaml`).
+an editable install (`pip install -e .` from a git clone). An existing local
+directory wins over a bundled problem of the same name (the error message
+points this out if the local dir is invalid). The caller's working directory
+is preserved: Hydra's default output dir (`outputs/<date>/<time>`) lands under
+the caller's cwd, so pass `hydra.run.dir=...` to pin it. User overrides win —
+addressing `problem.name`/`problem.dir` yourself (any Hydra form, `+`/`++`/`~`
+included) suppresses injection. Distinct from `gigaevo launch`, which drives
+the experiment-manifest lifecycle (`experiments/<exp>/experiment.yaml`).
 
 #### Monitoring
 
