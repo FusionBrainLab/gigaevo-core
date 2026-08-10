@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v2.18.0 (2026-08-10)
+
+### Bug Fixes
+
+- **cli**: Resolve nested bundled problem names + review fixes
+  ([`fc4cdf0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/fc4cdf0015c42183a1e7b3dd663589b3a6301598))
+
+- **cli**: Resolve nested bundled problem names + review fixes
+  ([`876fc10`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/876fc10df261a0b2742760fee2d797c3adbfcce1))
+
+### Features
+
+- **cli**: Add `gigaevo run` to launch runs from any directory
+  ([`efc555a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/efc555a15e577bbfd83191647a1f07d4f67e7775))
+
+
 ## v2.17.0 (2026-08-09)
 
 ### Features
