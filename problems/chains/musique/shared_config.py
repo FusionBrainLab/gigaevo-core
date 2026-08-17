@@ -5,6 +5,7 @@ execution uses passage-in-context (no external retrieval tools).
 """
 
 import json
+import os
 from pathlib import Path
 import random
 
@@ -27,7 +28,7 @@ LLM_CONFIG = {
         },
     },
     "client_kwargs": {
-        "api_key": "sk-or-v1-REDACTED",
+        "api_key": os.environ.get("OPENROUTER_API_KEY", ""),
         "base_url": "https://openrouter.ai/api/v1",
     },
 }
