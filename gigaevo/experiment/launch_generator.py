@@ -17,7 +17,8 @@ from gigaevo.experiment.manifest import load_manifest
 PROJ_PATH = str(Path(__file__).resolve().parent.parent.parent)
 
 PYTHON_PATH = os.environ.get(
-    "GIGAEVO_PYTHON", "python3"
+    "GIGAEVO_PYTHON",
+    "python3",
 )
 
 

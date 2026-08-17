@@ -327,6 +327,8 @@ class TestExistingYamlsStillLoad:
     """Adding new typed models must not change how existing yamls validate."""
 
     def test_sanity_at_least_ten_yamls_discovered(self):
+        if not (REPO_ROOT / "experiments").is_dir():
+            pytest.skip("experiments/ not present in this distribution")
         yamls = _all_v1_yamls()
         assert len(yamls) >= 10, (
             f"Expected >=10 real experiment.yaml files, found {len(yamls)}"
